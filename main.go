@@ -4,9 +4,6 @@
 // that can be found in the LICENSE file in the root of the source
 // tree.
 
-// This binary provides sample code for using the gopacket TCP assembler and TCP
-// stream reader.  It reads packets off the wire and reconstructs HTTP requests
-// it sees, logging them.
 package main
 
 import (
@@ -18,7 +15,6 @@ import (
 	"time"
 
 	"github.com/google/gopacket"
-	"github.com/google/gopacket/examples/util"
 	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/pcap"
 	"github.com/google/gopacket/tcpassembly"
@@ -30,6 +26,11 @@ var fname = flag.String("r", "", "Filename to read from, overrides -i")
 var snaplen = flag.Int("s", 1600, "SnapLen for pcap packet capture")
 var filter = flag.String("f", "tcp and dst port 80", "BPF filter for pcap")
 var logAllPackets = flag.Bool("v", false, "Logs every packet in great detail")
+
+var tcpTuples map[string]int
+var httpStatusCounts map[int]uint64
+var httpReqBytes uint64
+var httpRespBytes uint64
 
 // Build a simple HTTP request parser using tcpassembly.StreamFactory and tcpassembly.Stream interfaces
 
@@ -72,7 +73,8 @@ func (h *httpStream) run() {
 }
 
 func main() {
-	defer util.Run()()
+	flag.Parse()
+
 	var handle *pcap.Handle
 	var err error
 
