@@ -8,10 +8,12 @@ package main
 
 import (
 	"bufio"
+	"encoding/binary"
 	"flag"
 	"io"
 	"log"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/google/gopacket"
@@ -23,10 +25,13 @@ import (
 
 var iface = flag.String("i", "eth0", "Interface to get packets from")
 var fname = flag.String("r", "", "Filename to read from, overrides -i")
-var snaplen = flag.Int("s", 1600, "SnapLen for pcap packet capture")
-var filter = flag.String("f", "tcp and dst port 80", "BPF filter for pcap")
+var snaplen = flag.Int("s", 0, "SnapLen for pcap packet capture")
+var serverPort = flag.Int("p", 80, "Server port for differentiating HTTP responses from requests")
+var additionalFilter = flag.String("f", "", "Additional filter, added to default tcp port filter")
 var logAllPackets = flag.Bool("v", false, "Logs every packet in great detail")
 
+// TODO: timing for whole start/stop of tcp, and for each http req/resp, both time for resp and time
+// to next request (consider good metrics stuff for common stats like mean/max/90th, etc)
 var tcpTuples map[string]int
 var httpStatusCounts map[int]uint64
 var httpReqBytes uint64
@@ -43,19 +48,43 @@ type httpStream struct {
 	r              tcpreader.ReaderStream
 }
 
-func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
-	hstream := &httpStream{
-		net:       net,
-		transport: transport,
-		r:         tcpreader.NewReaderStream(),
-	}
-	go hstream.run() // Important... we must guarantee that data from the reader stream is read.
-
-	// ReaderStream implements tcpassembly.Stream, so we can return a pointer to it.
-	return &hstream.r
+type httpServerStream struct {
+	httpStream
 }
 
-func (h *httpStream) run() {
+type httpClientStream struct {
+	httpStream
+}
+
+// func ReadResponse(r *bufio.Reader, req *Request) (*Response, error)
+// func ReadRequest(b *bufio.Reader) (*Request, error)
+
+func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
+	src := int(binary.BigEndian.Uint16(transport.Src().Raw()))
+	if src == *serverPort {
+		// stream is from the server, so decode HTTP responses...
+		log.Println("decoding server stream")
+		server := &httpServerStream{httpStream{
+			net:       net,
+			transport: transport,
+			r:         tcpreader.NewReaderStream(),
+		}}
+		go server.process()
+		return &server.r
+	} else {
+		// otherwise, stream is from the client, so decode HTTP requests...
+		log.Println("decoding client stream")
+		client := &httpClientStream{httpStream{
+			net:       net,
+			transport: transport,
+			r:         tcpreader.NewReaderStream(),
+		}}
+		go client.process()
+		return &client.r
+	}
+}
+
+func (h *httpClientStream) process() {
 	buf := bufio.NewReader(&h.r)
 	for {
 		req, err := http.ReadRequest(buf)
@@ -63,11 +92,28 @@ func (h *httpStream) run() {
 			// We must read until we see an EOF... very important!
 			return
 		} else if err != nil {
-			log.Println("Error reading stream", h.net, h.transport, ":", err)
+			log.Println("Error reading client stream", h.net, h.transport, ":", err)
 		} else {
 			bodyBytes := tcpreader.DiscardBytesToEOF(req.Body)
 			req.Body.Close()
-			log.Println("Received request from stream", h.net, h.transport, ":", req, "with", bodyBytes, "bytes in request body")
+			log.Println("REQUEST", h.net, h.transport, ":", req, "with", bodyBytes)
+		}
+	}
+}
+
+func (h *httpServerStream) process() {
+	buf := bufio.NewReader(&h.r)
+	for {
+		resp, err := http.ReadResponse(buf, nil)
+		if err == io.EOF || err == io.ErrUnexpectedEOF {
+			// We must read until we see an EOF... very important!
+			return
+		} else if err != nil {
+			log.Println("Error reading server stream", h.net, h.transport, ":", err)
+		} else {
+			bodyBytes := tcpreader.DiscardBytesToEOF(resp.Body)
+			resp.Body.Close()
+			log.Println("RESPONSE", h.net, h.transport, ":", resp, "with", bodyBytes)
 		}
 	}
 }
@@ -90,7 +136,11 @@ func main() {
 		log.Fatal(err)
 	}
 
-	if err := handle.SetBPFFilter(*filter); err != nil {
+	filter := "tcp port " + strconv.Itoa(*serverPort)
+	if *additionalFilter != "" {
+		filter += " and " + *additionalFilter
+	}
+	if err := handle.SetBPFFilter(filter); err != nil {
 		log.Fatal(err)
 	}
 
