@@ -94,6 +94,14 @@ func (s *Stats) Push(x float64) {
 	s.runStats.Push(x)
 }
 
+func (s *Stats) Mean() float64 {
+	return s.runStats.Mean()
+}
+
+func (s *Stats) Len() int {
+	return s.runStats.Len()
+}
+
 func (s *Stats) String() string {
 	min := s.Min * 1000
 	mean := s.runStats.Mean() * 1000

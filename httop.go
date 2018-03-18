@@ -33,12 +33,13 @@ var fname = flag.String("r", "", "Filename to read from, overrides -i")
 var snaplen = flag.Int("s", 0, "SnapLen for pcap packet capture")
 var serverPort = flag.Int("p", 80, "Server port for differentiating HTTP responses from requests")
 var additionalFilter = flag.String("f", "", "Additional filter, added to default tcp port filter")
-var logAllPackets = flag.Bool("v", false, "Logs every packet in great detail")
+var verbose = flag.Bool("v", false, "Logs full HTTP request and response (with headers, etc.)")
 var flushMinutes = flag.Int("flush", 5, "Number of minutes to preserve tracking of idle connections")
 
 type httpPipeline struct {
 	requestTimes *Queue // of times when request was reported
 	stats        *HttpStats
+	key          uint64
 	refCount     int
 }
 
@@ -46,11 +47,23 @@ type httpPipeline struct {
 // responses are returned in the same order; see RFC-2616 section 8.1.2.2 Pipelining)
 var tcpConns map[uint64]*httpPipeline
 var tcpConnsMux *sync.Mutex
+var totalConns uint
+
+// keep aggregate stats (average of averages for intervals)
+var requestCountStats *Stats
+var responseCountStats *Stats
+var requestIntervalStats *Stats
+var responseIntervalStats *Stats
+var response1XXStats *Stats
+var response2XXStats *Stats
+var response3XXStats *Stats
+var response4XXStats *Stats
+var response5XXStats *Stats
 
 // httpStreamFactory implements tcpassembly.StreamFactory
 type httpStreamFactory struct{}
 
-// httpStream will handle the actual decoding of http requests.
+// httpStream will handle the actual decoding of http requests and implements tcpassembly.Stream
 type httpStream struct {
 	net, transport gopacket.Flow
 	r              tcpreader.ReaderStream
@@ -66,6 +79,37 @@ type httpServerStream struct {
 	httpStream
 }
 
+// attempt close of a pipeline, cleaning up if no more ref counts and adding in the aggregate stats
+func (p *httpPipeline) Close() {
+	tcpConnsMux.Lock()
+	defer tcpConnsMux.Unlock()
+	p.refCount--
+	if p.refCount > 0 {
+		return
+	}
+	delete(tcpConns, p.key)
+	requestCountStats.Push(float64(p.stats.RequestCount))
+	responseCountStats.Push(float64(p.stats.ResponseCount))
+	requestIntervalStats.Push(p.stats.RequestIntervalStats.Mean())
+	responseIntervalStats.Push(p.stats.ResponseIntervalStats.Mean())
+	for status, count := range p.stats.ResponseStatusCounts {
+		switch status / 100 {
+		case 1:
+			response1XXStats.Push(float64(count))
+		case 2:
+			response2XXStats.Push(float64(count))
+		case 3:
+			response3XXStats.Push(float64(count))
+		case 4:
+			response4XXStats.Push(float64(count))
+		case 5:
+			response5XXStats.Push(float64(count))
+		default:
+			log.Println("ERROR: Unknown status found:", status)
+		}
+	}
+}
+
 func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
 	// track each unique connection
 	// note: FastHash is guaranteed to match in both directions so we track it only once
@@ -76,14 +120,15 @@ func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream
 	if pipeline, set = tcpConns[key]; set {
 		pipeline.refCount++
 	} else {
+		totalConns++
 		pipeline = &httpPipeline{
 			requestTimes: NewQueue(1),
 			stats:        NewHttpStats(),
+			key:          key,
 			refCount:     1,
 		}
 		tcpConns[key] = pipeline
 	}
-	fmt.Println("pipeline", pipeline)
 	tcpConnsMux.Unlock()
 
 	// set up appropriate decoder...
@@ -144,9 +189,9 @@ func (h *httpClientStream) Reassembled(reassembly []tcpassembly.Reassembly) {
 }
 
 func (h *httpClientStream) ReassemblyComplete() {
-	log.Printf("%s closed: %s", h.name, h.pipeline.stats) // FIXME: report stats
+	log.Printf("%s closed: %s", h.name, h.pipeline.stats)
 	h.r.ReassemblyComplete()
-	// FIXME: remove if refCount < 1
+	h.pipeline.Close()
 }
 
 func (h *httpServerStream) process() {
@@ -185,10 +230,32 @@ func (h *httpServerStream) Reassembled(reassembly []tcpassembly.Reassembly) {
 func (h *httpServerStream) ReassemblyComplete() {
 	log.Printf("%s closed: %s", h.name, h.pipeline.stats)
 	h.r.ReassemblyComplete()
+	h.pipeline.Close()
 }
 
 func report() {
-	log.Printf("connections=%d", len(tcpConns))
+	log.Printf("connections: active=%d total=%d", len(tcpConns), totalConns)
+	log.Println("request stats:")
+	log.Println("  counts:", requestCountStats)
+	log.Println("  intervals:", requestIntervalStats)
+	log.Println("response stats:")
+	log.Println("  counts:", responseCountStats)
+	log.Println("  intervals:", responseIntervalStats)
+	if response1XXStats.Len() > 0 {
+		log.Println("  1XX:", response1XXStats)
+	}
+	if response2XXStats.Len() > 0 {
+		log.Println("  2XX:", response2XXStats)
+	}
+	if response3XXStats.Len() > 0 {
+		log.Println("  3XX:", response3XXStats)
+	}
+	if response4XXStats.Len() > 0 {
+		log.Println("  4XX:", response4XXStats)
+	}
+	if response5XXStats.Len() > 0 {
+		log.Println("  5XX:", response5XXStats)
+	}
 }
 
 func main() {
@@ -221,6 +288,17 @@ func main() {
 	tcpConns = make(map[uint64]*httpPipeline)
 	tcpConnsMux = &sync.Mutex{}
 
+	// Set up aggregate stats
+	requestCountStats = NewStats()
+	responseCountStats = NewStats()
+	requestIntervalStats = NewStats()
+	responseIntervalStats = NewStats()
+	response1XXStats = NewStats()
+	response2XXStats = NewStats()
+	response3XXStats = NewStats()
+	response4XXStats = NewStats()
+	response5XXStats = NewStats()
+
 	// Set up assembly
 	streamFactory := &httpStreamFactory{}
 	streamPool := tcpassembly.NewStreamPool(streamFactory)
@@ -248,15 +326,14 @@ func main() {
 			if packet == nil {
 				return
 			}
-			if *logAllPackets {
-				log.Println(packet)
-			}
-			if packet.NetworkLayer() == nil || packet.TransportLayer() == nil || packet.TransportLayer().LayerType() != layers.LayerTypeTCP {
-				log.Println("Unusable packet")
+			if packet.NetworkLayer() == nil || packet.TransportLayer() == nil ||
+				packet.TransportLayer().LayerType() != layers.LayerTypeTCP {
+				// log.Println("Ignoring unusable packet")
 				continue
 			}
 			tcp := packet.TransportLayer().(*layers.TCP)
-			assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp, packet.Metadata().Timestamp)
+			assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp,
+				packet.Metadata().Timestamp)
 
 		case <-ticker:
 			if *flushMinutes > 0 {
