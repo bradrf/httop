@@ -13,6 +13,7 @@ type Stats struct {
 	Min float64
 	Max float64
 
+	format   string
 	runStats *onlinestats.Running
 }
 
@@ -33,8 +34,8 @@ type HttpStats struct {
 func NewHttpStats() *HttpStats {
 	return &HttpStats{
 		ResponseStatusCounts:  make(map[int]uint),
-		RequestIntervalStats:  NewStats(),
-		ResponseIntervalStats: NewStats(),
+		RequestIntervalStats:  NewStats(3, "s"),
+		ResponseIntervalStats: NewStats(3, "s"),
 		lastRequestSentAt:     time.Now(),
 		lastResponseSentAt:    time.Now(),
 	}
@@ -76,10 +77,18 @@ func (s *HttpStats) String() string {
 	return str + "\n"
 }
 
-func NewStats() *Stats {
+func NewStats(precision int, unit string) *Stats {
+	format := fmt.Sprintf(
+		"min=%%.%df%s mean=%%.%df%s max=%%.%df%s stddev=%%.%df%s",
+		precision, unit,
+		precision, unit,
+		precision, unit,
+		precision, unit,
+	)
 	return &Stats{
 		Min:      math.MaxFloat64,
 		Max:      math.SmallestNonzeroFloat64,
+		format:   format,
 		runStats: onlinestats.NewRunning(),
 	}
 }
@@ -103,10 +112,5 @@ func (s *Stats) Len() int {
 }
 
 func (s *Stats) String() string {
-	min := s.Min * 1000
-	mean := s.runStats.Mean() * 1000
-	max := s.Max * 1000
-	stddev := s.runStats.Stddev() * 1000
-	return fmt.Sprintf("min=%.1fms mean=%.1fms max=%.1fms stddev=%.1fms",
-		min, mean, max, stddev)
+	return fmt.Sprintf(s.format, s.Min, s.runStats.Mean(), s.Max, s.runStats.Stddev())
 }

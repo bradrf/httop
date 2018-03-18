@@ -289,15 +289,15 @@ func main() {
 	tcpConnsMux = &sync.Mutex{}
 
 	// Set up aggregate stats
-	requestCountStats = NewStats()
-	responseCountStats = NewStats()
-	requestIntervalStats = NewStats()
-	responseIntervalStats = NewStats()
-	response1XXStats = NewStats()
-	response2XXStats = NewStats()
-	response3XXStats = NewStats()
-	response4XXStats = NewStats()
-	response5XXStats = NewStats()
+	requestCountStats = NewStats(1, "")
+	responseCountStats = NewStats(1, "")
+	requestIntervalStats = NewStats(3, "s")
+	responseIntervalStats = NewStats(3, "s")
+	response1XXStats = NewStats(1, "")
+	response2XXStats = NewStats(1, "")
+	response3XXStats = NewStats(1, "")
+	response4XXStats = NewStats(1, "")
+	response5XXStats = NewStats(1, "")
 
 	// Set up assembly
 	streamFactory := &httpStreamFactory{}
