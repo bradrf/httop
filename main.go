@@ -13,7 +13,12 @@ import (
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"os/signal"
 	"strconv"
+	"sync"
+	"sync/atomic"
+	"syscall"
 	"time"
 
 	"github.com/google/gopacket"
@@ -29,15 +34,15 @@ var snaplen = flag.Int("s", 0, "SnapLen for pcap packet capture")
 var serverPort = flag.Int("p", 80, "Server port for differentiating HTTP responses from requests")
 var additionalFilter = flag.String("f", "", "Additional filter, added to default tcp port filter")
 var logAllPackets = flag.Bool("v", false, "Logs every packet in great detail")
+var flushMinutes = flag.Int("flush", 5, "Number of minutes to preserve tracking of idle connections")
 
 // TODO: timing for whole start/stop of tcp, and for each http req/resp, both time for resp and time
 // to next request (consider good metrics stuff for common stats like mean/max/90th, etc)
-var tcpTuples map[string]int
-var httpStatusCounts map[int]uint64
+var mux sync.Mutex
+var tcpConns map[uint64]uint64
+var httpStatusCounts map[uint64]uint64
 var httpReqBytes uint64
 var httpRespBytes uint64
-
-// Build a simple HTTP request parser using tcpassembly.StreamFactory and tcpassembly.Stream interfaces
 
 // httpStreamFactory implements tcpassembly.StreamFactory
 type httpStreamFactory struct{}
@@ -56,14 +61,13 @@ type httpClientStream struct {
 	httpStream
 }
 
-// func ReadResponse(r *bufio.Reader, req *Request) (*Response, error)
-// func ReadRequest(b *bufio.Reader) (*Request, error)
-
 func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
+	// track each unique connection
+	// note: FastHash is guaranteed to match in both directions so we track it only once
+	mapInc(tcpConns, transport.FastHash())
 	src := int(binary.BigEndian.Uint16(transport.Src().Raw()))
 	if src == *serverPort {
 		// stream is from the server, so decode HTTP responses...
-		log.Println("decoding server stream")
 		server := &httpServerStream{httpStream{
 			net:       net,
 			transport: transport,
@@ -73,7 +77,6 @@ func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream
 		return &server.r
 	} else {
 		// otherwise, stream is from the client, so decode HTTP requests...
-		log.Println("decoding client stream")
 		client := &httpClientStream{httpStream{
 			net:       net,
 			transport: transport,
@@ -94,9 +97,10 @@ func (h *httpClientStream) process() {
 		} else if err != nil {
 			log.Println("Error reading client stream", h.net, h.transport, ":", err)
 		} else {
-			bodyBytes := tcpreader.DiscardBytesToEOF(req.Body)
+			bodyBytes := uint64(tcpreader.DiscardBytesToEOF(req.Body))
 			req.Body.Close()
 			log.Println("REQUEST", h.net, h.transport, ":", req, "with", bodyBytes)
+			atomic.AddUint64(&httpReqBytes, bodyBytes)
 		}
 	}
 }
@@ -111,10 +115,31 @@ func (h *httpServerStream) process() {
 		} else if err != nil {
 			log.Println("Error reading server stream", h.net, h.transport, ":", err)
 		} else {
-			bodyBytes := tcpreader.DiscardBytesToEOF(resp.Body)
+			bodyBytes := uint64(tcpreader.DiscardBytesToEOF(resp.Body))
 			resp.Body.Close()
 			log.Println("RESPONSE", h.net, h.transport, ":", resp, "with", bodyBytes)
+			atomic.AddUint64(&httpRespBytes, bodyBytes)
+			mapInc(httpStatusCounts, uint64(resp.StatusCode))
 		}
+	}
+}
+
+func mapInc(m map[uint64]uint64, k uint64) {
+	mux.Lock()
+	defer mux.Unlock()
+	if _, set := m[k]; set {
+		m[k] += 1
+	} else {
+		m[k] = 1
+	}
+}
+
+func report() {
+	log.Printf("connections=%d", len(tcpConns))
+	log.Printf("request_body_bytes=%d", httpReqBytes)
+	log.Printf("response_body_bytes=%d", httpRespBytes)
+	for status, count := range httpStatusCounts {
+		log.Printf("%d=%d", status, count)
 	}
 }
 
@@ -144,6 +169,10 @@ func main() {
 		log.Fatal(err)
 	}
 
+	// Set up metrics
+	tcpConns = make(map[uint64]uint64)
+	httpStatusCounts = make(map[uint64]uint64)
+
 	// Set up assembly
 	streamFactory := &httpStreamFactory{}
 	streamPool := tcpassembly.NewStreamPool(streamFactory)
@@ -154,6 +183,16 @@ func main() {
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	packets := packetSource.Packets()
 	ticker := time.Tick(time.Minute)
+
+	// Issue final report on a normal exit
+	sigc := make(chan os.Signal, 1)
+	signal.Notify(sigc, syscall.SIGINT, syscall.SIGTERM, syscall.SIGQUIT)
+	go func() {
+		_ = <-sigc
+		report()
+		os.Exit(0)
+	}()
+
 	for {
 		select {
 		case packet := <-packets:
@@ -172,8 +211,12 @@ func main() {
 			assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp, packet.Metadata().Timestamp)
 
 		case <-ticker:
-			// Every minute, flush connections that haven't seen activity in the past 2 minutes.
-			assembler.FlushOlderThan(time.Now().Add(time.Minute * -2))
+			if *flushMinutes > 0 {
+				// Every minute, flush connections that haven't seen recent activity.
+				diff := time.Duration(0 - *flushMinutes)
+				assembler.FlushOlderThan(time.Now().Add(time.Minute * diff))
+			}
+			report()
 		}
 	}
 }
