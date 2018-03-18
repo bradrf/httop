@@ -18,7 +18,6 @@ import (
 	"os/signal"
 	"strconv"
 	"sync"
-	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -29,7 +28,7 @@ import (
 	"github.com/google/gopacket/tcpassembly/tcpreader"
 )
 
-var iface = flag.String("i", "eth0", "Interface to get packets from")
+var iface = flag.String("i", "en0", "Interface to get packets from")
 var fname = flag.String("r", "", "Filename to read from, overrides -i")
 var snaplen = flag.Int("s", 0, "SnapLen for pcap packet capture")
 var serverPort = flag.Int("p", 80, "Server port for differentiating HTTP responses from requests")
@@ -37,13 +36,16 @@ var additionalFilter = flag.String("f", "", "Additional filter, added to default
 var logAllPackets = flag.Bool("v", false, "Logs every packet in great detail")
 var flushMinutes = flag.Int("flush", 5, "Number of minutes to preserve tracking of idle connections")
 
-// TODO: timing for whole start/stop of tcp, and for each http req/resp, both time for resp and time
-// to next request (consider good metrics stuff for common stats like mean/max/90th, etc)
-var mux sync.Mutex
-var tcpConns map[uint64]uint64
-var httpStatusCounts map[uint64]uint64
-var httpReqBytes uint64
-var httpRespBytes uint64
+type httpPipeline struct {
+	requestTimes *Queue // of times when request was reported
+	stats        *HttpStats
+	refCount     int
+}
+
+// associate requests with responses (HTTP 1.1 allows multiple requests outstanding as long as
+// responses are returned in the same order; see RFC-2616 section 8.1.2.2 Pipelining)
+var tcpConns map[uint64]*httpPipeline
+var tcpConnsMux *sync.Mutex
 
 // httpStreamFactory implements tcpassembly.StreamFactory
 type httpStreamFactory struct{}
@@ -53,22 +55,38 @@ type httpStream struct {
 	net, transport gopacket.Flow
 	r              tcpreader.ReaderStream
 	name           string
+	pipeline       *httpPipeline
 }
 
 type httpClientStream struct {
 	httpStream
-	requests uint64
 }
 
 type httpServerStream struct {
 	httpStream
-	responses uint64
 }
 
 func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
 	// track each unique connection
 	// note: FastHash is guaranteed to match in both directions so we track it only once
-	mapInc(tcpConns, transport.FastHash())
+	var pipeline *httpPipeline
+	var set bool
+	key := transport.FastHash()
+	tcpConnsMux.Lock()
+	if pipeline, set = tcpConns[key]; set {
+		pipeline.refCount++
+	} else {
+		pipeline = &httpPipeline{
+			requestTimes: NewQueue(1),
+			stats:        NewHttpStats(),
+			refCount:     1,
+		}
+		tcpConns[key] = pipeline
+	}
+	fmt.Println("pipeline", pipeline)
+	tcpConnsMux.Unlock()
+
+	// set up appropriate decoder...
 	src := int(binary.BigEndian.Uint16(transport.Src().Raw()))
 	if src == *serverPort {
 		// stream is from the server, so decode HTTP responses...
@@ -78,8 +96,8 @@ func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream
 				transport: transport,
 				r:         tcpreader.NewReaderStream(),
 				name:      fmt.Sprintf("server (%s %s)", net, transport),
+				pipeline:  pipeline,
 			},
-			responses: 0,
 		}
 		go server.process()
 		return server
@@ -91,8 +109,8 @@ func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream
 				transport: transport,
 				r:         tcpreader.NewReaderStream(),
 				name:      fmt.Sprintf("client (%s %s)", net, transport),
+				pipeline:  pipeline,
 			},
-			requests: 0,
 		}
 		go client.process()
 		return client
@@ -109,11 +127,14 @@ func (h *httpClientStream) process() {
 		} else if err != nil {
 			log.Println("Error reading", h.name, ":", err)
 		} else {
+			now := time.Now() // FIXME: use time from pcap!
+
 			bodyBytes := uint64(tcpreader.DiscardBytesToEOF(req.Body))
 			req.Body.Close()
 			log.Println(h.name, "request:", req, "with", bodyBytes)
-			atomic.AddUint64(&httpReqBytes, bodyBytes)
-			atomic.AddUint64(&h.requests, 1)
+
+			h.pipeline.requestTimes.Unshift(now)
+			h.pipeline.stats.RecordRequest(now, bodyBytes)
 		}
 	}
 }
@@ -123,8 +144,9 @@ func (h *httpClientStream) Reassembled(reassembly []tcpassembly.Reassembly) {
 }
 
 func (h *httpClientStream) ReassemblyComplete() {
-	log.Printf("%s closed: requests=%d", h.name, h.requests)
+	log.Printf("%s closed: %s", h.name, h.pipeline.stats) // FIXME: report stats
 	h.r.ReassemblyComplete()
+	// FIXME: remove if refCount < 1
 }
 
 func (h *httpServerStream) process() {
@@ -137,12 +159,21 @@ func (h *httpServerStream) process() {
 		} else if err != nil {
 			log.Println("Error reading", h.name, ":", err)
 		} else {
+			now := time.Now() // FIXME: use time from pcap!
+
 			bodyBytes := uint64(tcpreader.DiscardBytesToEOF(resp.Body))
 			resp.Body.Close()
 			log.Println(h.name, "response:", resp, "with", bodyBytes)
-			atomic.AddUint64(&httpRespBytes, bodyBytes)
-			mapInc(httpStatusCounts, uint64(resp.StatusCode))
-			atomic.AddUint64(&h.responses, 1)
+
+			val := h.pipeline.requestTimes.Shift()
+			var requestedAt time.Time
+			if val == nil {
+				requestedAt = time.Now() // FIXME: use time from pcap!
+			} else {
+				requestedAt = val.(time.Time)
+			}
+
+			h.pipeline.stats.RecordResponse(now, requestedAt, bodyBytes, resp.StatusCode)
 		}
 	}
 }
@@ -152,27 +183,12 @@ func (h *httpServerStream) Reassembled(reassembly []tcpassembly.Reassembly) {
 }
 
 func (h *httpServerStream) ReassemblyComplete() {
-	log.Printf("%s closed: responses=%d", h.name, h.responses)
+	log.Printf("%s closed: %s", h.name, h.pipeline.stats)
 	h.r.ReassemblyComplete()
-}
-
-func mapInc(m map[uint64]uint64, k uint64) {
-	mux.Lock()
-	defer mux.Unlock()
-	if _, set := m[k]; set {
-		m[k] += 1
-	} else {
-		m[k] = 1
-	}
 }
 
 func report() {
 	log.Printf("connections=%d", len(tcpConns))
-	log.Printf("request_body_bytes=%d", httpReqBytes)
-	log.Printf("response_body_bytes=%d", httpRespBytes)
-	for status, count := range httpStatusCounts {
-		log.Printf("%d=%d", status, count)
-	}
 }
 
 func main() {
@@ -201,9 +217,9 @@ func main() {
 		log.Fatal(err)
 	}
 
-	// Set up metrics
-	tcpConns = make(map[uint64]uint64)
-	httpStatusCounts = make(map[uint64]uint64)
+	// Set up connection tracking
+	tcpConns = make(map[uint64]*httpPipeline)
+	tcpConnsMux = &sync.Mutex{}
 
 	// Set up assembly
 	streamFactory := &httpStreamFactory{}
