@@ -10,6 +10,7 @@ import (
 	"bufio"
 	"encoding/binary"
 	"flag"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -51,14 +52,17 @@ type httpStreamFactory struct{}
 type httpStream struct {
 	net, transport gopacket.Flow
 	r              tcpreader.ReaderStream
-}
-
-type httpServerStream struct {
-	httpStream
+	name           string
 }
 
 type httpClientStream struct {
 	httpStream
+	requests uint64
+}
+
+type httpServerStream struct {
+	httpStream
+	responses uint64
 }
 
 func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
@@ -68,22 +72,30 @@ func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream
 	src := int(binary.BigEndian.Uint16(transport.Src().Raw()))
 	if src == *serverPort {
 		// stream is from the server, so decode HTTP responses...
-		server := &httpServerStream{httpStream{
-			net:       net,
-			transport: transport,
-			r:         tcpreader.NewReaderStream(),
-		}}
+		server := &httpServerStream{
+			httpStream: httpStream{
+				net:       net,
+				transport: transport,
+				r:         tcpreader.NewReaderStream(),
+				name:      fmt.Sprintf("server (%s %s)", net, transport),
+			},
+			responses: 0,
+		}
 		go server.process()
-		return &server.r
+		return server
 	} else {
 		// otherwise, stream is from the client, so decode HTTP requests...
-		client := &httpClientStream{httpStream{
-			net:       net,
-			transport: transport,
-			r:         tcpreader.NewReaderStream(),
-		}}
+		client := &httpClientStream{
+			httpStream: httpStream{
+				net:       net,
+				transport: transport,
+				r:         tcpreader.NewReaderStream(),
+				name:      fmt.Sprintf("client (%s %s)", net, transport),
+			},
+			requests: 0,
+		}
 		go client.process()
-		return &client.r
+		return client
 	}
 }
 
@@ -95,14 +107,24 @@ func (h *httpClientStream) process() {
 			// We must read until we see an EOF... very important!
 			return
 		} else if err != nil {
-			log.Println("Error reading client stream", h.net, h.transport, ":", err)
+			log.Println("Error reading", h.name, ":", err)
 		} else {
 			bodyBytes := uint64(tcpreader.DiscardBytesToEOF(req.Body))
 			req.Body.Close()
-			log.Println("REQUEST", h.net, h.transport, ":", req, "with", bodyBytes)
+			log.Println(h.name, "request:", req, "with", bodyBytes)
 			atomic.AddUint64(&httpReqBytes, bodyBytes)
+			atomic.AddUint64(&h.requests, 1)
 		}
 	}
+}
+
+func (h *httpClientStream) Reassembled(reassembly []tcpassembly.Reassembly) {
+	h.r.Reassembled(reassembly)
+}
+
+func (h *httpClientStream) ReassemblyComplete() {
+	log.Printf("%s closed: requests=%d", h.name, h.requests)
+	h.r.ReassemblyComplete()
 }
 
 func (h *httpServerStream) process() {
@@ -113,15 +135,25 @@ func (h *httpServerStream) process() {
 			// We must read until we see an EOF... very important!
 			return
 		} else if err != nil {
-			log.Println("Error reading server stream", h.net, h.transport, ":", err)
+			log.Println("Error reading", h.name, ":", err)
 		} else {
 			bodyBytes := uint64(tcpreader.DiscardBytesToEOF(resp.Body))
 			resp.Body.Close()
-			log.Println("RESPONSE", h.net, h.transport, ":", resp, "with", bodyBytes)
+			log.Println(h.name, "response:", resp, "with", bodyBytes)
 			atomic.AddUint64(&httpRespBytes, bodyBytes)
 			mapInc(httpStatusCounts, uint64(resp.StatusCode))
+			atomic.AddUint64(&h.responses, 1)
 		}
 	}
+}
+
+func (h *httpServerStream) Reassembled(reassembly []tcpassembly.Reassembly) {
+	h.r.Reassembled(reassembly)
+}
+
+func (h *httpServerStream) ReassemblyComplete() {
+	log.Printf("%s closed: responses=%d", h.name, h.responses)
+	h.r.ReassemblyComplete()
 }
 
 func mapInc(m map[uint64]uint64, k uint64) {
