@@ -3,17 +3,20 @@ package main
 import (
 	"fmt"
 	"math"
+	"strconv"
 	"sync"
 	"time"
 
 	"github.com/dgryski/go-onlinestats"
 )
 
+type StatToStringFunc func(float64) string
+
 type Stats struct {
 	Min float64
 	Max float64
 
-	format   string
+	toString StatToStringFunc
 	runStats *onlinestats.Running
 }
 
@@ -31,11 +34,25 @@ type HttpStats struct {
 	lastResponseSentAt time.Time
 }
 
+func DurationStatToString(x float64) string {
+	if math.IsNaN(x) {
+		return "NaN"
+	}
+	return time.Duration(x).String()
+}
+
+func CountStatToString(x float64) string {
+	if math.IsNaN(x) {
+		return "NaN"
+	}
+	return strconv.FormatUint(uint64(x), 10)
+}
+
 func NewHttpStats() *HttpStats {
 	return &HttpStats{
 		ResponseStatusCounts:  make(map[int]uint),
-		RequestIntervalStats:  NewStats(3, "s"),
-		ResponseIntervalStats: NewStats(3, "s"),
+		RequestIntervalStats:  NewStats(DurationStatToString),
+		ResponseIntervalStats: NewStats(DurationStatToString),
 		lastRequestSentAt:     time.Now(),
 		lastResponseSentAt:    time.Now(),
 	}
@@ -47,7 +64,7 @@ func (s *HttpStats) RecordRequest(now time.Time, bytes uint64) {
 	s.RequestCount++
 	s.RequestBytes += bytes
 	diff := now.Sub(s.lastResponseSentAt)
-	s.RequestIntervalStats.Push(diff.Seconds())
+	s.RequestIntervalStats.PushDuration(diff)
 	s.lastRequestSentAt = now
 }
 
@@ -62,7 +79,7 @@ func (s *HttpStats) RecordResponse(now time.Time, requestSentAt time.Time, bytes
 		s.ResponseStatusCounts[status] = 1
 	}
 	diff := now.Sub(requestSentAt)
-	s.ResponseIntervalStats.Push(diff.Seconds())
+	s.ResponseIntervalStats.PushDuration(diff)
 	s.lastResponseSentAt = now
 }
 
@@ -77,20 +94,25 @@ func (s *HttpStats) String() string {
 	return str + "\n"
 }
 
-func NewStats(precision int, unit string) *Stats {
-	format := fmt.Sprintf(
-		"count=%%d min=%%.%df%s mean=%%.%df%s max=%%.%df%s stddev=%%.%df%s",
-		precision, unit,
-		precision, unit,
-		precision, unit,
-		precision, unit,
-	)
+func NewStats(statToString StatToStringFunc) *Stats {
 	return &Stats{
 		Min:      math.MaxFloat64,
-		Max:      math.SmallestNonzeroFloat64,
-		format:   format,
+		Max:      -math.SmallestNonzeroFloat64,
+		toString: statToString,
 		runStats: onlinestats.NewRunning(),
 	}
+}
+
+func (s *Stats) PushDuration(x time.Duration) {
+	s.Push(float64(x.Nanoseconds()))
+}
+
+func (s *Stats) PushUint64(x uint64) {
+	s.Push(float64(x))
+}
+
+func (s *Stats) PushUint(x uint) {
+	s.Push(float64(x))
 }
 
 func (s *Stats) Push(x float64) {
@@ -112,6 +134,10 @@ func (s *Stats) Len() int {
 }
 
 func (s *Stats) String() string {
-	return fmt.Sprintf(s.format,
-		s.runStats.Len(), s.Min, s.runStats.Mean(), s.Max, s.runStats.Stddev())
+	if s.Len() < 1 {
+		return fmt.Sprintf("count=0")
+	}
+	return fmt.Sprintf("count=%d min=%s mean=%s max=%s stddev=%s",
+		s.runStats.Len(), s.toString(s.Min), s.toString(s.runStats.Mean()),
+		s.toString(s.Max), s.toString(s.runStats.Stddev()))
 }

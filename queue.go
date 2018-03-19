@@ -10,7 +10,7 @@ type Queue struct {
 func NewQueue(size int) *Queue {
 	return &Queue{
 		mux:   &sync.Mutex{},
-		nodes: make([]interface{}, size),
+		nodes: make([]interface{}, 0, size),
 	}
 }
 

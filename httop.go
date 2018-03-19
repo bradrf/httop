@@ -26,9 +26,11 @@ import (
 // make it clear that the aggregates are stats per tcp connection.
 // probably also should report overall counts for 2xx, etc
 
+// ubuntu@ip-172-26-4-144:~/httop$ GOPATH=`pwd` go build -a -ldflags '-extldflags "-static"' -o httop.linux64
+
 var iface = flag.String("i", "en6", "Interface to get packets from")
 var fname = flag.String("r", "", "Filename to read from, overrides -i")
-var snaplen = flag.Int("s", 0, "SnapLen for pcap packet capture")
+var snaplen = flag.Int("s", 65536, "SnapLen for pcap packet capture")
 var serverPort = flag.Int("p", 80, "Server port for differentiating HTTP responses from requests")
 var additionalFilter = flag.String("f", "", "Additional filter, added to default tcp port filter")
 var verbose = flag.Bool("v", false, "Logs full HTTP request and response (with headers, etc.)")
@@ -86,22 +88,22 @@ func (p *httpPipeline) Close() {
 		return
 	}
 	delete(tcpConns, p.key)
-	requestCountStats.Push(float64(p.stats.RequestCount))
-	responseCountStats.Push(float64(p.stats.ResponseCount))
+	requestCountStats.PushUint(p.stats.RequestCount)
+	responseCountStats.PushUint(p.stats.ResponseCount)
 	requestIntervalStats.Push(p.stats.RequestIntervalStats.Mean())
 	responseIntervalStats.Push(p.stats.ResponseIntervalStats.Mean())
 	for status, count := range p.stats.ResponseStatusCounts {
 		switch status / 100 {
 		case 1:
-			response1XXStats.Push(float64(count))
+			response1XXStats.PushUint(count)
 		case 2:
-			response2XXStats.Push(float64(count))
+			response2XXStats.PushUint(count)
 		case 3:
-			response3XXStats.Push(float64(count))
+			response3XXStats.PushUint(count)
 		case 4:
-			response4XXStats.Push(float64(count))
+			response4XXStats.PushUint(count)
 		case 5:
-			response5XXStats.Push(float64(count))
+			response5XXStats.PushUint(count)
 		default:
 			log.Println("ERROR: Unknown status found:", status)
 		}
@@ -161,6 +163,9 @@ func (h *httpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream
 }
 
 func (h *httpClientStream) process() {
+	now := time.Now() // FIXME: use time from pcap!
+	h.pipeline.requestTimes.Unshift(now)
+
 	buf := bufio.NewReader(&h.r)
 	for {
 		req, err := http.ReadRequest(buf)
@@ -170,19 +175,14 @@ func (h *httpClientStream) process() {
 		} else if err != nil {
 			log.Println("Error reading", h.name, ":", err)
 		} else {
-			now := time.Now() // FIXME: use time from pcap!
-
 			bodyBytes := uint64(tcpreader.DiscardBytesToEOF(req.Body))
 			req.Body.Close()
-
 			if *verbose {
 				log.Println(h.name, "request:", req, "with", bodyBytes)
 			} else {
 				ctype := req.Header.Get("content-type")
 				log.Println(h.name, req.Method, req.Host, req.URL, bodyBytes, ctype)
 			}
-
-			h.pipeline.requestTimes.Unshift(now)
 			h.pipeline.stats.RecordRequest(now, bodyBytes)
 		}
 	}
@@ -199,6 +199,7 @@ func (h *httpClientStream) ReassemblyComplete() {
 }
 
 func (h *httpServerStream) process() {
+	now := time.Now() // FIXME: use time from pcap!
 	buf := bufio.NewReader(&h.r)
 	for {
 		resp, err := http.ReadResponse(buf, nil)
@@ -208,8 +209,6 @@ func (h *httpServerStream) process() {
 		} else if err != nil {
 			log.Println("Error reading", h.name, ":", err)
 		} else {
-			now := time.Now() // FIXME: use time from pcap!
-
 			bodyBytes := uint64(tcpreader.DiscardBytesToEOF(resp.Body))
 			resp.Body.Close()
 
@@ -223,7 +222,7 @@ func (h *httpServerStream) process() {
 			val := h.pipeline.requestTimes.Shift()
 			var requestedAt time.Time
 			if val == nil {
-				requestedAt = time.Now() // FIXME: use time from pcap!
+				requestedAt = now // FIXME: use time from pcap!
 			} else {
 				requestedAt = val.(time.Time)
 			}
@@ -301,15 +300,15 @@ func main() {
 	tcpConnsMux = &sync.Mutex{}
 
 	// Set up aggregate stats
-	requestCountStats = NewStats(1, "")
-	responseCountStats = NewStats(1, "")
-	requestIntervalStats = NewStats(3, "s")
-	responseIntervalStats = NewStats(3, "s")
-	response1XXStats = NewStats(1, "")
-	response2XXStats = NewStats(1, "")
-	response3XXStats = NewStats(1, "")
-	response4XXStats = NewStats(1, "")
-	response5XXStats = NewStats(1, "")
+	requestCountStats = NewStats(CountStatToString)
+	responseCountStats = NewStats(CountStatToString)
+	requestIntervalStats = NewStats(DurationStatToString)
+	responseIntervalStats = NewStats(DurationStatToString)
+	response1XXStats = NewStats(CountStatToString)
+	response2XXStats = NewStats(CountStatToString)
+	response3XXStats = NewStats(CountStatToString)
+	response4XXStats = NewStats(CountStatToString)
+	response5XXStats = NewStats(CountStatToString)
 
 	// Set up assembly
 	streamFactory := &httpStreamFactory{}
