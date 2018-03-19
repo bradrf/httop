@@ -1,9 +1,3 @@
-// Copyright 2012 Google, Inc. All rights reserved.
-//
-// Use of this source code is governed by a BSD-style license
-// that can be found in the LICENSE file in the root of the source
-// tree.
-
 package main
 
 import (
@@ -28,7 +22,11 @@ import (
 	"github.com/google/gopacket/tcpassembly/tcpreader"
 )
 
-var iface = flag.String("i", "en0", "Interface to get packets from")
+// TODO: add idle stats (or, maybe just rename request intervals as idle...)
+// make it clear that the aggregates are stats per tcp connection.
+// probably also should report overall counts for 2xx, etc
+
+var iface = flag.String("i", "en6", "Interface to get packets from")
 var fname = flag.String("r", "", "Filename to read from, overrides -i")
 var snaplen = flag.Int("s", 0, "SnapLen for pcap packet capture")
 var serverPort = flag.Int("p", 80, "Server port for differentiating HTTP responses from requests")
@@ -176,7 +174,13 @@ func (h *httpClientStream) process() {
 
 			bodyBytes := uint64(tcpreader.DiscardBytesToEOF(req.Body))
 			req.Body.Close()
-			log.Println(h.name, "request:", req, "with", bodyBytes)
+
+			if *verbose {
+				log.Println(h.name, "request:", req, "with", bodyBytes)
+			} else {
+				ctype := req.Header.Get("content-type")
+				log.Println(h.name, req.Method, req.Host, req.URL, bodyBytes, ctype)
+			}
 
 			h.pipeline.requestTimes.Unshift(now)
 			h.pipeline.stats.RecordRequest(now, bodyBytes)
@@ -189,7 +193,7 @@ func (h *httpClientStream) Reassembled(reassembly []tcpassembly.Reassembly) {
 }
 
 func (h *httpClientStream) ReassemblyComplete() {
-	log.Printf("%s closed: %s", h.name, h.pipeline.stats)
+	log.Printf("%s closed:\n%s", h.name, h.pipeline.stats)
 	h.r.ReassemblyComplete()
 	h.pipeline.Close()
 }
@@ -208,7 +212,13 @@ func (h *httpServerStream) process() {
 
 			bodyBytes := uint64(tcpreader.DiscardBytesToEOF(resp.Body))
 			resp.Body.Close()
-			log.Println(h.name, "response:", resp, "with", bodyBytes)
+
+			if *verbose {
+				log.Println(h.name, "response:", resp, "with", bodyBytes)
+			} else {
+				ctype := resp.Header.Get("content-type")
+				log.Println(h.name, resp.Status, bodyBytes, ctype)
+			}
 
 			val := h.pipeline.requestTimes.Shift()
 			var requestedAt time.Time
@@ -228,7 +238,7 @@ func (h *httpServerStream) Reassembled(reassembly []tcpassembly.Reassembly) {
 }
 
 func (h *httpServerStream) ReassemblyComplete() {
-	log.Printf("%s closed: %s", h.name, h.pipeline.stats)
+	log.Printf("%s closed:\n%s", h.name, h.pipeline.stats)
 	h.r.ReassemblyComplete()
 	h.pipeline.Close()
 }
@@ -266,6 +276,8 @@ func main() {
 
 	// Set up pcap packet capture
 	if *fname != "" {
+		// FIXME: need to support reading time from pcap before we allow this...
+		log.Panic("Not supported")
 		log.Printf("Reading from pcap dump %q", *fname)
 		handle, err = pcap.OpenOffline(*fname)
 	} else {

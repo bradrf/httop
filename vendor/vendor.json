@@ -7,6 +7,12 @@
 			"path": "github.com/dgryski/go-onlinestats",
 			"revision": "1c7d1946876822b4a3a4b11b598e3aad1d05265e",
 			"revisionTime": "2017-06-12T11:18:26Z"
+		},
+		{
+			"checksumSHA1": "+ij2363e4zbfBr0IOMAtq0D/vJQ=",
+			"path": "github.com/google/gopacket",
+			"revision": "b40365fca6ccb41d3892c4caa0f6e7545ee2fdcf",
+			"revisionTime": "2018-02-11T20:00:25Z"
 		}
 	],
 	"rootPath": "github.com/bradrf/httop"

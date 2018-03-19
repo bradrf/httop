@@ -79,7 +79,7 @@ func (s *HttpStats) String() string {
 
 func NewStats(precision int, unit string) *Stats {
 	format := fmt.Sprintf(
-		"min=%%.%df%s mean=%%.%df%s max=%%.%df%s stddev=%%.%df%s",
+		"count=%%d min=%%.%df%s mean=%%.%df%s max=%%.%df%s stddev=%%.%df%s",
 		precision, unit,
 		precision, unit,
 		precision, unit,
@@ -112,5 +112,6 @@ func (s *Stats) Len() int {
 }
 
 func (s *Stats) String() string {
-	return fmt.Sprintf(s.format, s.Min, s.runStats.Mean(), s.Max, s.runStats.Stddev())
+	return fmt.Sprintf(s.format,
+		s.runStats.Len(), s.Min, s.runStats.Mean(), s.Max, s.runStats.Stddev())
 }
