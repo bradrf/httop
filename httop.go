@@ -26,6 +26,8 @@ import (
 // make it clear that the aggregates are stats per tcp connection.
 // probably also should report overall counts for 2xx, etc
 
+// TODO: report client IP from [0] of x-forward-for headers...
+
 // ubuntu@ip-172-26-4-144:~/httop$ GOPATH=`pwd` go build -a -ldflags '-extldflags "-static"' -o httop.linux64
 
 var iface = flag.String("i", "en6", "Interface to get packets from")
@@ -34,6 +36,7 @@ var snaplen = flag.Int("s", 65536, "SnapLen for pcap packet capture")
 var serverPort = flag.Int("p", 80, "Server port for differentiating HTTP responses from requests")
 var additionalFilter = flag.String("f", "", "Additional filter, added to default tcp port filter")
 var verbose = flag.Bool("v", false, "Logs full HTTP request and response (with headers, etc.)")
+var quiet = flag.Bool("q", false, "Restrict logs to only close and summary reports")
 var flushMinutes = flag.Int("flush", 5, "Number of minutes to preserve tracking of idle connections")
 
 type httpPipeline struct {
@@ -179,7 +182,7 @@ func (h *httpClientStream) process() {
 			req.Body.Close()
 			if *verbose {
 				log.Println(h.name, "request:", req, "with", bodyBytes)
-			} else {
+			} else if !*quiet {
 				ctype := req.Header.Get("content-type")
 				log.Println(h.name, req.Method, req.Host, req.URL, bodyBytes, ctype)
 			}
@@ -214,7 +217,7 @@ func (h *httpServerStream) process() {
 
 			if *verbose {
 				log.Println(h.name, "response:", resp, "with", bodyBytes)
-			} else {
+			} else if !*quiet {
 				ctype := resp.Header.Get("content-type")
 				log.Println(h.name, resp.Status, bodyBytes, ctype)
 			}
