@@ -48,13 +48,13 @@ func CountStatToString(x float64) string {
 	return strconv.FormatUint(uint64(x), 10)
 }
 
-func NewHttpStats() *HttpStats {
+func NewHttpStats(startedAt time.Time) *HttpStats {
 	return &HttpStats{
 		ResponseStatusCounts:  make(map[int]uint),
 		RequestIntervalStats:  NewStats(DurationStatToString),
 		ResponseIntervalStats: NewStats(DurationStatToString),
-		lastRequestSentAt:     time.Now(),
-		lastResponseSentAt:    time.Now(),
+		lastRequestSentAt:     startedAt,
+		lastResponseSentAt:    startedAt,
 	}
 }
 
