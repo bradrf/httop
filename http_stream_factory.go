@@ -9,7 +9,10 @@ import (
 	"github.com/google/gopacket/tcpassembly/tcpreader"
 )
 
-// httpStreamFactory implements tcpassembly.StreamFactory
+const SERVER = "server"
+const CLIENT = "client"
+
+// implement tcpassembly.StreamFactory
 type HttpStreamFactory struct {
 	connTracker *ConnTracker
 }
@@ -19,34 +22,17 @@ func NewHttpStreamFactory(connTracker *ConnTracker) *HttpStreamFactory {
 }
 
 func (h *HttpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream {
-	pipeline := h.connTracker.Open(transport.FastHash())
-	// set up appropriate decoder...
+	var stype string
 	src := int(binary.BigEndian.Uint16(transport.Src().Raw()))
 	if src == *serverPort {
-		// stream is from the server, so decode HTTP responses...
-		server := &httpServerStream{
-			HttpStream: HttpStream{
-				net:       net,
-				transport: transport,
-				r:         tcpreader.NewReaderStream(),
-				name:      fmt.Sprintf("server (%s %s)", net, transport),
-				pipeline:  pipeline,
-			},
-		}
-		go server.process()
-		return &server.HttpStream
+		stype = SERVER
 	} else {
-		// otherwise, stream is from the client, so decode HTTP requests...
-		client := &httpClientStream{
-			HttpStream: HttpStream{
-				net:       net,
-				transport: transport,
-				r:         tcpreader.NewReaderStream(),
-				name:      fmt.Sprintf("client (%s %s)", net, transport),
-				pipeline:  pipeline,
-			},
-		}
-		go client.process()
-		return &client.HttpStream
+		stype = CLIENT
 	}
+	name := fmt.Sprintf("%s (%s %s)", stype, net, transport)
+	reader := tcpreader.NewReaderStream()
+	pipeline := h.connTracker.Open(transport.FastHash())
+	stream := NewHttpStream(name, stype, reader, pipeline)
+	go stream.Process()
+	return stream
 }

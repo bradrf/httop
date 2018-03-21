@@ -16,15 +16,15 @@ type ConnTracker struct {
 	conns map[uint64]*HttpPipeline
 	mux   *sync.Mutex
 
-	requestCountStats  *Stats
-	responseCountStats *Stats
-	idleStats          *Stats
-	waitingStats       *Stats
-	response1XXStats   *Stats
-	response2XXStats   *Stats
-	response3XXStats   *Stats
-	response4XXStats   *Stats
-	response5XXStats   *Stats
+	requestCountStats  *SimpleStats
+	responseCountStats *SimpleStats
+	idleTimes          *SimpleStats
+	responseTimes      *SimpleStats
+	response1XXStats   *SimpleStats
+	response2XXStats   *SimpleStats
+	response3XXStats   *SimpleStats
+	response4XXStats   *SimpleStats
+	response5XXStats   *SimpleStats
 }
 
 // FIXME: move these into conn tracker!
@@ -37,15 +37,15 @@ func NewConnTracker() *ConnTracker {
 		conns: make(map[uint64]*HttpPipeline),
 		mux:   &sync.Mutex{},
 
-		requestCountStats:  NewStats(CountStatToString),
-		responseCountStats: NewStats(CountStatToString),
-		idleStats:          NewStats(DurationStatToString),
-		waitingStats:       NewStats(DurationStatToString),
-		response1XXStats:   NewStats(CountStatToString),
-		response2XXStats:   NewStats(CountStatToString),
-		response3XXStats:   NewStats(CountStatToString),
-		response4XXStats:   NewStats(CountStatToString),
-		response5XXStats:   NewStats(CountStatToString),
+		requestCountStats:  NewSimpleStats(),
+		responseCountStats: NewSimpleStats(),
+		idleTimes:          NewSimpleStats(),
+		responseTimes:      NewSimpleStats(),
+		response1XXStats:   NewSimpleStats(),
+		response2XXStats:   NewSimpleStats(),
+		response3XXStats:   NewSimpleStats(),
+		response4XXStats:   NewSimpleStats(),
+		response5XXStats:   NewSimpleStats(),
 	}
 }
 
@@ -70,9 +70,9 @@ func (c *ConnTracker) Close(bidirectionalKey uint64) {
 	delete(c.conns, bidirectionalKey)
 	c.requestCountStats.PushUint(pipeline.Stats.RequestCount)
 	c.responseCountStats.PushUint(pipeline.Stats.ResponseCount)
-	c.idleStats.Push(pipeline.Stats.RequestIntervalStats.Mean())
-	c.waitingStats.Push(pipeline.Stats.ResponseIntervalStats.Mean())
-	for status, count := range pipeline.Stats.ResponseStatusCounts {
+	c.idleTimes.Push(pipeline.Stats.IdleTimes.Mean())
+	c.responseTimes.Push(pipeline.Stats.ResponseTimes.Mean())
+	for status, count := range pipeline.Stats.StatusCounts {
 		switch status / 100 {
 		case 1:
 			c.response1XXStats.PushUint(count)
@@ -95,9 +95,9 @@ func (c *ConnTracker) Close(bidirectionalKey uint64) {
 func (c *ConnTracker) Report() {
 	log.Printf("connections: active=%d total=%d", len(c.conns), c.TotalSeen)
 	log.Println("requests/conn avg:", c.requestCountStats)
-	log.Println("idle avg:", c.idleStats)
+	log.Println("idle avg:", c.idleTimes)
 	log.Println("responses/conn avg:", c.responseCountStats)
-	log.Println("waiting avg:", c.waitingStats)
+	log.Println("waiting avg:", c.responseTimes)
 	if c.response1XXStats.Len() > 0 {
 		log.Println("  1XX:", c.response1XXStats)
 	}

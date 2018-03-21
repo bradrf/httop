@@ -7,61 +7,66 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/google/gopacket"
 	"github.com/google/gopacket/tcpassembly"
 	"github.com/google/gopacket/tcpassembly/tcpreader"
 )
 
-// Handle decoding of HTTP requests and implements tcpassembly.Stream
+// Handle decoding of HTTP requests and implement tcpassembly.Stream
 type HttpStream struct {
-	net, transport gopacket.Flow
-	r              tcpreader.ReaderStream
-	name           string
-	pipeline       *HttpPipeline
+	name          string
+	stype         string
+	reader        tcpreader.ReaderStream
+	pipeline      *HttpPipeline
+	reassembledAt time.Time
 }
 
-type httpClientStream struct {
-	HttpStream
+func NewHttpStream(name string, stype string,
+	reader tcpreader.ReaderStream, pipeline *HttpPipeline) *HttpStream {
+	return &HttpStream{
+		name:     name,
+		stype:    stype,
+		reader:   reader,
+		pipeline: pipeline,
+	}
 }
 
-type httpServerStream struct {
-	HttpStream
+func (h *HttpStream) Process() {
+	if h.stype == CLIENT {
+		h.processClient()
+	} else {
+		h.processServer()
+	}
 }
-
-//////////////////////////////////////////////////////////////////////
 
 func (h *HttpStream) Reassembled(reassembly []tcpassembly.Reassembly) {
 	first := reassembly[0]
+	h.reassembledAt = first.Seen
 	if first.Skip != 0 {
 		log.Printf("%s skipped %d bytes", h.name, first.Skip)
 	}
 	if first.Start {
-		h.pipeline.StartedAt = first.Seen
+		h.pipeline.StartedAt = h.reassembledAt
 	}
 	if h.pipeline.StartedAt.IsZero() {
-		// FIXME: h.pipeline.StartedAt = lastPacketSeen
-		h.pipeline.StartedAt = time.Now()
-		log.Printf("%s unknown when stream was started, using last seen packet time", h.name)
+		h.pipeline.StartedAt = h.reassembledAt
+		log.Printf("%s unknown when stream was started, using reassembly time", h.name)
 	}
 	if h.pipeline.Stats == nil {
 		h.pipeline.Stats = NewHttpStats(h.pipeline.StartedAt)
 	}
-	h.r.Reassembled(reassembly)
+	h.reader.Reassembled(reassembly)
 }
 
 func (h *HttpStream) ReassemblyComplete() {
 	log.Printf("%s closed:\n%s", h.name, h.pipeline.Stats)
-	h.r.ReassemblyComplete()
+	h.reader.ReassemblyComplete()
 	h.pipeline.Release()
 }
 
 //////////////////////////////////////////////////////////////////////
 
-func (h *httpClientStream) process() {
-	now := time.Now() // FIXME: use time from pcap!
-	h.pipeline.RequestTimes.Unshift(now)
-
-	buf := bufio.NewReader(&h.r)
+func (h *HttpStream) processClient() {
+	buf := bufio.NewReader(&h.reader)
 	for {
 		req, err := http.ReadRequest(buf)
 		if err == io.EOF {
@@ -70,6 +75,9 @@ func (h *httpClientStream) process() {
 		} else if err != nil {
 			log.Println("Error reading", h.name, ":", err)
 		} else {
+			now := h.reassembledAt
+			h.pipeline.RequestTimes.Unshift(now)
+
 			bodyBytes := uint64(tcpreader.DiscardBytesToEOF(req.Body))
 			req.Body.Close()
 			if *verbose {
@@ -78,14 +86,14 @@ func (h *httpClientStream) process() {
 				ctype := req.Header.Get("content-type")
 				log.Println(h.name, req.Method, req.Host, req.URL, bodyBytes, ctype)
 			}
+
 			h.pipeline.Stats.RecordRequest(now, bodyBytes)
 		}
 	}
 }
 
-func (h *httpServerStream) process() {
-	now := time.Now() // FIXME: use time from pcap!
-	buf := bufio.NewReader(&h.r)
+func (h *HttpStream) processServer() {
+	buf := bufio.NewReader(&h.reader)
 	for {
 		resp, err := http.ReadResponse(buf, nil)
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
@@ -94,6 +102,8 @@ func (h *httpServerStream) process() {
 		} else if err != nil {
 			log.Println("Error reading", h.name, ":", err)
 		} else {
+			now := h.reassembledAt
+
 			bodyBytes := uint64(tcpreader.DiscardBytesToEOF(resp.Body))
 			resp.Body.Close()
 
@@ -107,7 +117,7 @@ func (h *httpServerStream) process() {
 			val := h.pipeline.RequestTimes.Shift()
 			var requestedAt time.Time
 			if val == nil {
-				requestedAt = now // FIXME: use time from pcap!
+				requestedAt = now
 			} else {
 				requestedAt = val.(time.Time)
 			}
