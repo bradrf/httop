@@ -32,6 +32,7 @@ var additionalFilter = flag.String("f", "", "Additional filter, added to default
 var verbose = flag.Bool("v", false, "Logs full HTTP request and response (with headers, etc.)")
 var quiet = flag.Bool("q", false, "Restrict logs to only close and summary reports")
 var flushMinutes = flag.Int("flush", 5, "Number of minutes to preserve tracking of idle connections")
+var delaySeconds = flag.Int("delay", 5, "Number of seconds to wait between connection reports")
 
 func main() {
 	flag.Parse()
@@ -67,7 +68,10 @@ func main() {
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
 	packets := packetSource.Packets()
-	ticker := time.Tick(time.Minute)
+
+	flushDuration := time.Duration(*flushMinutes) * time.Minute
+	flushTicker := time.Tick(time.Duration(1) * time.Minute)
+	reportTicker := time.Tick(time.Duration(*delaySeconds) * time.Second)
 
 	// Issue final report on a normal exit
 	sigc := make(chan os.Signal, 1)
@@ -95,12 +99,13 @@ func main() {
 			assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp,
 				packet.Metadata().Timestamp)
 
-		case <-ticker:
+		case <-flushTicker:
 			if *flushMinutes > 0 {
 				// Every minute, flush connections that haven't seen recent activity.
-				diff := time.Duration(0 - *flushMinutes)
-				assembler.FlushOlderThan(time.Now().Add(time.Minute * diff))
+				oldAt := time.Now().Add(-flushDuration)
+				assembler.FlushOlderThan(oldAt)
 			}
+		case <-reportTicker:
 			connTracker.Report()
 		}
 	}

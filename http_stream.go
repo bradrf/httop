@@ -43,7 +43,9 @@ func (h *HttpStream) Reassembled(reassembly []tcpassembly.Reassembly) {
 		h.pipeline.StartedAt = time.Now()
 		log.Printf("%s unknown when stream was started, using last seen packet time", h.name)
 	}
-	h.pipeline.Stats = NewHttpStats(h.pipeline.StartedAt)
+	if h.pipeline.Stats == nil {
+		h.pipeline.Stats = NewHttpStats(h.pipeline.StartedAt)
+	}
 	h.r.Reassembled(reassembly)
 }
 
