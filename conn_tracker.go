@@ -55,7 +55,8 @@ func (c *ConnTracker) Open(connName string, bidirectionalKey uint64) *HttpConn {
 	httpConn, set := c.conns[bidirectionalKey]
 	if !set {
 		c.TotalSeen++
-		httpConn = NewHttpConn(connName, func() { c.Close(bidirectionalKey) })
+		httpConn = NewHttpConn(connName, c.LastPacketSeen,
+			func() { c.Close(bidirectionalKey) })
 		c.conns[bidirectionalKey] = httpConn
 	}
 	httpConn.Use()

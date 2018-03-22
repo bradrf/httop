@@ -18,10 +18,11 @@ type HttpConn struct {
 	onComplete HttpConnOnCompleteFunc
 }
 
-func NewHttpConn(name string, onComplete HttpConnOnCompleteFunc) *HttpConn {
+func NewHttpConn(name string, lastPacketSeen time.Time, onComplete HttpConnOnCompleteFunc) *HttpConn {
 	return &HttpConn{
 		Name:         name,
 		RequestTimes: NewQueue(1),
+		Stats:        NewHttpStats(name, lastPacketSeen),
 		onComplete:   onComplete,
 	}
 }

@@ -39,22 +39,14 @@ func (h *HttpStream) Process() {
 }
 
 func (h *HttpStream) Reassembled(reassembly []tcpassembly.Reassembly) {
-	first := reassembly[0]
-	h.reassembledAt = first.Seen
-	if first.Skip != 0 {
-		log.Printf("%s skipped %d bytes", h.name, first.Skip)
-	}
-	if first.Start {
-		h.httpConn.StartedAt = h.reassembledAt
-	}
-	if h.httpConn.StartedAt.IsZero() {
-		h.httpConn.StartedAt = h.reassembledAt
-		log.Printf("%s unknown when stream was started, using reassembly time", h.name)
-	}
-	if h.httpConn.Stats == nil {
-		h.httpConn.Stats = NewHttpStats(h.httpConn.Name, h.httpConn.StartedAt)
-	}
+	h.reassembledAt = reassembly[0].Seen
 	for _, r := range reassembly {
+		if r.Skip != 0 {
+			log.Printf("%s skipped %d bytes", h.name, r.Skip)
+		}
+		if r.Start {
+			h.httpConn.Stats.RecordStart(r.Seen)
+		}
 		if r.End {
 			if h.stype == CLIENT {
 				h.httpConn.Stats.RecordClientClose(r.Seen)

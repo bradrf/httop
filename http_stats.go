@@ -21,6 +21,7 @@ type HttpStats struct {
 	ServerClosedAt time.Time    // time when server closed the connection
 
 	mux                sync.Mutex
+	sawStart           bool // indicate if we saw the TCP handshake for this connection
 	startedAt          time.Time
 	lastRequestSentAt  time.Time
 	lastResponseSentAt time.Time
@@ -63,6 +64,13 @@ func (s *HttpStats) RecordResponse(now time.Time, requestSentAt time.Time, bytes
 	s.lastResponseSentAt = now
 }
 
+func (s *HttpStats) RecordStart(now time.Time) {
+	s.mux.Lock()
+	defer s.mux.Unlock()
+	s.startedAt = now
+	s.sawStart = true
+}
+
 func (s *HttpStats) RecordClientClose(now time.Time) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
@@ -93,10 +101,14 @@ func (s *HttpStats) Age() time.Duration {
 }
 
 func (s *HttpStats) ReportString(prefix string) string {
+	postAge := ""
+	if !s.sawStart {
+		postAge = "(missed-start)"
+	}
 	str := fmt.Sprintf(
-		"%s%s: requests=%d responses=%d request_bytes=%d response_bytes=%d age=%s",
+		"%s%s: requests=%d responses=%d request_bytes=%d response_bytes=%d age=%s%s",
 		prefix, s.Name, s.RequestCount, s.ResponseCount,
-		s.RequestBytes, s.ResponseBytes, s.Age())
+		s.RequestBytes, s.ResponseBytes, s.Age(), postAge)
 	closedBy := s.ClosedBy()
 	if closedBy != "" {
 		str += fmt.Sprintf("\n%s  closed by %s: client=%s server=%s",
