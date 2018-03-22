@@ -29,7 +29,7 @@ func (h *HttpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream
 	} else {
 		stype = CLIENT
 	}
-	httpConnName := fmt.Sprintf("%s:%s <=> %s:%s)",
+	httpConnName := fmt.Sprintf("%s:%s <=> %s:%s",
 		net.Src(), transport.Src(), net.Dst(), transport.Dst())
 	streamName := fmt.Sprintf("%s (%s %s)", stype, net, transport)
 	reader := tcpreader.NewReaderStream()

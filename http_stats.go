@@ -21,6 +21,7 @@ type HttpStats struct {
 	ServerClosedAt time.Time    // time when server closed the connection
 
 	mux                sync.Mutex
+	startedAt          time.Time
 	lastRequestSentAt  time.Time
 	lastResponseSentAt time.Time
 }
@@ -32,6 +33,7 @@ func NewHttpStats(name string, connectionStartedAt time.Time) *HttpStats {
 		IdleTime:     NewSimpleStats(),
 		ResponseTime: NewSimpleStats(),
 
+		startedAt:          connectionStartedAt,
 		lastRequestSentAt:  connectionStartedAt,
 		lastResponseSentAt: connectionStartedAt,
 	}
@@ -74,22 +76,53 @@ func (s *HttpStats) RecordServerClose(now time.Time) {
 	s.ServerClosedAt = now
 }
 
+func (s *HttpStats) ClosedBy() string {
+	if !s.ClientClosedAt.IsZero() && s.ClientClosedAt.Sub(s.ServerClosedAt) < 0 {
+		return CLIENT
+	}
+	if !s.ServerClosedAt.IsZero() && s.ServerClosedAt.Sub(s.ClientClosedAt) < 0 {
+		return SERVER
+	}
+	return ""
+}
+
+func (s *HttpStats) Age() time.Duration {
+	// FIXME: use most recently read packet to track "now"
+	now := time.Now()
+	return now.Sub(s.startedAt)
+}
+
+func (s *HttpStats) ReportString(prefix string) string {
+	str := fmt.Sprintf(
+		"%s%s: requests=%d responses=%d request_bytes=%d response_bytes=%d age=%s",
+		prefix, s.Name, s.RequestCount, s.ResponseCount,
+		s.RequestBytes, s.ResponseBytes, s.Age())
+	closedBy := s.ClosedBy()
+	if closedBy != "" {
+		str += fmt.Sprintf("\n%s  closed by %s: client=%s server=%s",
+			prefix, closedBy,
+			s.ClientClosedAt.Format(time.RFC3339Nano),
+			s.ServerClosedAt.Format(time.RFC3339Nano))
+	}
+	if s.IdleTime.Len() > 0 {
+		str += fmt.Sprintf("\n%s  idle time: %s",
+			prefix, s.IdleTime.ReportString(DurationStatToString))
+	}
+	if s.ResponseCount > 0 {
+		str += fmt.Sprintf("\n%s  response time: %s",
+			prefix, s.ResponseTime.ReportString(DurationStatToString))
+		if len(s.StatusCounts) > 0 {
+			str += fmt.Sprintf("\n%s  response status:", prefix)
+			for status, count := range s.StatusCounts {
+				str += fmt.Sprintf(" %d=%d", status, count)
+			}
+		}
+	}
+	return str
+}
+
 func (s *HttpStats) String() string {
-	str := s.Name + ":\n"
-	if !s.ClientClosedAt.IsZero() || !s.ServerClosedAt.IsZero() {
-		str += fmt.Sprintf("  closed: client=%s server=%s\n",
-			s.ClientClosedAt.Format(time.RFC3339),
-			s.ServerClosedAt.Format(time.RFC3339))
-	}
-	str += fmt.Sprintf("  idle time: bytes=%d %s\n",
-		s.RequestBytes, s.IdleTime.ReportString(DurationStatToString))
-	str += fmt.Sprintf("  response time: bytes=%d %s\n",
-		s.ResponseBytes, s.ResponseTime.ReportString(DurationStatToString))
-	str += "  response status:"
-	for status, count := range s.StatusCounts {
-		str += fmt.Sprintf(" %d=%d", status, count)
-	}
-	return str + "\n"
+	return s.ReportString("")
 }
 
 func (s *HttpStats) recordIdle(now time.Time) {

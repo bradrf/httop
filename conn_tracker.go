@@ -67,7 +67,7 @@ func (c *ConnTracker) Close(bidirectionalKey uint64) {
 	c.mux.Lock()
 	defer c.mux.Unlock()
 	httpConn := c.conns[bidirectionalKey]
-	log.Println(httpConn.Stats)
+	log.Print(httpConn.Stats)
 	delete(c.conns, bidirectionalKey)
 	c.requestCountStats.PushUint(httpConn.Stats.RequestCount)
 	c.responseCountStats.PushUint(httpConn.Stats.ResponseCount)
@@ -115,6 +115,8 @@ func (c *ConnTracker) Report() {
 	// 	log.Println("  5XX:", c.response5XXStats)
 	// }
 	for _, httpConn := range c.conns {
-		fmt.Println(httpConn.Stats)
+		if httpConn.Stats != nil {
+			fmt.Println(httpConn.Stats.ReportString("[RPT] "))
+		}
 	}
 }
