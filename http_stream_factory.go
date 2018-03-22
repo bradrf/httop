@@ -29,10 +29,12 @@ func (h *HttpStreamFactory) New(net, transport gopacket.Flow) tcpassembly.Stream
 	} else {
 		stype = CLIENT
 	}
-	name := fmt.Sprintf("%s (%s %s)", stype, net, transport)
+	httpConnName := fmt.Sprintf("%s:%s <=> %s:%s)",
+		net.Src(), transport.Src(), net.Dst(), transport.Dst())
+	streamName := fmt.Sprintf("%s (%s %s)", stype, net, transport)
 	reader := tcpreader.NewReaderStream()
-	pipeline := h.connTracker.Open(transport.FastHash())
-	stream := NewHttpStream(name, stype, reader, pipeline)
+	httpConn := h.connTracker.Open(httpConnName, transport.FastHash())
+	stream := NewHttpStream(streamName, stype, reader, httpConn)
 	go stream.Process()
 	return stream
 }

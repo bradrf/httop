@@ -13,13 +13,13 @@ type ConnTracker struct {
 	TotalSeen      uint
 	LastPacketSeen time.Time
 
-	conns map[uint64]*HttpPipeline
+	conns map[uint64]*HttpConn
 	mux   *sync.Mutex
 
 	requestCountStats  *SimpleStats
 	responseCountStats *SimpleStats
-	idleTimes          *SimpleStats
-	responseTimes      *SimpleStats
+	idleTime           *SimpleStats
+	responseTime       *SimpleStats
 	response1XXStats   *SimpleStats
 	response2XXStats   *SimpleStats
 	response3XXStats   *SimpleStats
@@ -34,13 +34,13 @@ func NewConnTracker() *ConnTracker {
 	// Set up aggregate stats
 
 	return &ConnTracker{
-		conns: make(map[uint64]*HttpPipeline),
+		conns: make(map[uint64]*HttpConn),
 		mux:   &sync.Mutex{},
 
 		requestCountStats:  NewSimpleStats(),
 		responseCountStats: NewSimpleStats(),
-		idleTimes:          NewSimpleStats(),
-		responseTimes:      NewSimpleStats(),
+		idleTime:           NewSimpleStats(),
+		responseTime:       NewSimpleStats(),
 		response1XXStats:   NewSimpleStats(),
 		response2XXStats:   NewSimpleStats(),
 		response3XXStats:   NewSimpleStats(),
@@ -49,30 +49,31 @@ func NewConnTracker() *ConnTracker {
 	}
 }
 
-func (c *ConnTracker) Open(bidirectionalKey uint64) *HttpPipeline {
+func (c *ConnTracker) Open(connName string, bidirectionalKey uint64) *HttpConn {
 	c.mux.Lock()
 	defer c.mux.Unlock()
-	pipeline, set := c.conns[bidirectionalKey]
+	httpConn, set := c.conns[bidirectionalKey]
 	if !set {
 		c.TotalSeen++
-		pipeline = NewPipeline(func() { c.Close(bidirectionalKey) })
-		c.conns[bidirectionalKey] = pipeline
+		httpConn = NewHttpConn(connName, func() { c.Close(bidirectionalKey) })
+		c.conns[bidirectionalKey] = httpConn
 	}
-	pipeline.Use()
-	return pipeline
+	httpConn.Use()
+	return httpConn
 }
 
-// attempt close of a pipeline, cleaning up if no longer referenced and aggregate stats
+// attempt close of a httpConn, cleaning up if no longer referenced and aggregate stats
 func (c *ConnTracker) Close(bidirectionalKey uint64) {
 	c.mux.Lock()
 	defer c.mux.Unlock()
-	pipeline := c.conns[bidirectionalKey]
+	httpConn := c.conns[bidirectionalKey]
+	log.Println(httpConn.Stats)
 	delete(c.conns, bidirectionalKey)
-	c.requestCountStats.PushUint(pipeline.Stats.RequestCount)
-	c.responseCountStats.PushUint(pipeline.Stats.ResponseCount)
-	c.idleTimes.Push(pipeline.Stats.IdleTimes.Mean())
-	c.responseTimes.Push(pipeline.Stats.ResponseTimes.Mean())
-	for status, count := range pipeline.Stats.StatusCounts {
+	c.requestCountStats.PushUint(httpConn.Stats.RequestCount)
+	c.responseCountStats.PushUint(httpConn.Stats.ResponseCount)
+	c.idleTime.Push(httpConn.Stats.IdleTime.Mean())
+	c.responseTime.Push(httpConn.Stats.ResponseTime.Mean())
+	for status, count := range httpConn.Stats.StatusCounts {
 		switch status / 100 {
 		case 1:
 			c.response1XXStats.PushUint(count)
@@ -94,26 +95,26 @@ func (c *ConnTracker) Close(bidirectionalKey uint64) {
 // TODO: https://github.com/gizak/termui
 func (c *ConnTracker) Report() {
 	log.Printf("connections: active=%d total=%d", len(c.conns), c.TotalSeen)
-	log.Println("requests/conn avg:", c.requestCountStats)
-	log.Println("idle avg:", c.idleTimes)
-	log.Println("responses/conn avg:", c.responseCountStats)
-	log.Println("waiting avg:", c.responseTimes)
-	if c.response1XXStats.Len() > 0 {
-		log.Println("  1XX:", c.response1XXStats)
-	}
-	if c.response2XXStats.Len() > 0 {
-		log.Println("  2XX:", c.response2XXStats)
-	}
-	if c.response3XXStats.Len() > 0 {
-		log.Println("  3XX:", c.response3XXStats)
-	}
-	if c.response4XXStats.Len() > 0 {
-		log.Println("  4XX:", c.response4XXStats)
-	}
-	if c.response5XXStats.Len() > 0 {
-		log.Println("  5XX:", c.response5XXStats)
-	}
-	for _, pipeline := range c.conns {
-		fmt.Println(pipeline.Stats)
+	// log.Println("requests/conn avg:", c.requestCountStats)
+	// log.Println("idle avg:", c.idleTime)
+	// log.Println("responses/conn avg:", c.responseCountStats)
+	// log.Println("waiting avg:", c.responseTime)
+	// if c.response1XXStats.Len() > 0 {
+	// 	log.Println("  1XX:", c.response1XXStats)
+	// }
+	// if c.response2XXStats.Len() > 0 {
+	// 	log.Println("  2XX:", c.response2XXStats)
+	// }
+	// if c.response3XXStats.Len() > 0 {
+	// 	log.Println("  3XX:", c.response3XXStats)
+	// }
+	// if c.response4XXStats.Len() > 0 {
+	// 	log.Println("  4XX:", c.response4XXStats)
+	// }
+	// if c.response5XXStats.Len() > 0 {
+	// 	log.Println("  5XX:", c.response5XXStats)
+	// }
+	for _, httpConn := range c.conns {
+		fmt.Println(httpConn.Stats)
 	}
 }

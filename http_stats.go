@@ -9,25 +9,28 @@ import (
 type StatToStringFunc func(float64) string
 
 type HttpStats struct {
-	RequestCount  uint         // number of requests
-	ResponseCount uint         // number of responses
-	RequestBytes  uint64       // sum of all request bodies
-	ResponseBytes uint64       // sum of all response bodies
-	StatusCounts  map[int]uint // type and number of response status codes found
-	IdleTimes     *SimpleStats // track how much time was spent not waiting for a response
-	ResponseTimes *SimpleStats // track how much time was spent waiting for a response
-	ClosedBy      string       // indicate who initiated closing the connection
+	Name           string       // name of connection
+	RequestCount   uint         // number of requests
+	ResponseCount  uint         // number of responses
+	RequestBytes   uint64       // sum of all request bodies
+	ResponseBytes  uint64       // sum of all response bodies
+	StatusCounts   map[int]uint // type and number of status codes found
+	IdleTime       *SimpleStats // track how much time was spent not waiting for a response
+	ResponseTime   *SimpleStats // track how much time was spent waiting for a response
+	ClientClosedAt time.Time    // time when client closed the connection
+	ServerClosedAt time.Time    // time when server closed the connection
 
 	mux                sync.Mutex
 	lastRequestSentAt  time.Time
 	lastResponseSentAt time.Time
 }
 
-func NewHttpStats(connectionStartedAt time.Time) *HttpStats {
+func NewHttpStats(name string, connectionStartedAt time.Time) *HttpStats {
 	return &HttpStats{
-		StatusCounts:  make(map[int]uint),
-		IdleTimes:     NewSimpleStats(),
-		ResponseTimes: NewSimpleStats(),
+		Name:         name,
+		StatusCounts: make(map[int]uint),
+		IdleTime:     NewSimpleStats(),
+		ResponseTime: NewSimpleStats(),
 
 		lastRequestSentAt:  connectionStartedAt,
 		lastResponseSentAt: connectionStartedAt,
@@ -54,7 +57,7 @@ func (s *HttpStats) RecordResponse(now time.Time, requestSentAt time.Time, bytes
 		s.StatusCounts[status] = 1
 	}
 	diff := now.Sub(requestSentAt)
-	s.ResponseTimes.PushDuration(diff)
+	s.ResponseTime.PushDuration(diff)
 	s.lastResponseSentAt = now
 }
 
@@ -62,21 +65,27 @@ func (s *HttpStats) RecordClientClose(now time.Time) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.recordIdle(now)
-	s.ClosedBy = CLIENT
+	s.ClientClosedAt = now
 }
 
 func (s *HttpStats) RecordServerClose(now time.Time) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	s.recordIdle(now)
-	s.ClosedBy = SERVER
+	s.ServerClosedAt = now
 }
 
 func (s *HttpStats) String() string {
-	str := fmt.Sprintf("idle time: bytes=%d stats=(%s)\n",
-		s.RequestBytes, s.IdleTimes.ReportString(DurationStatToString))
-	str += fmt.Sprintf("response time: bytes=%d stats=(%s)",
-		s.ResponseBytes, s.ResponseTimes.ReportString(DurationStatToString))
+	str := s.Name + ":\n"
+	if !s.ClientClosedAt.IsZero() || !s.ServerClosedAt.IsZero() {
+		str += fmt.Sprintf("  closed: client=%s server=%s\n",
+			s.ClientClosedAt.Format(time.RFC3339),
+			s.ServerClosedAt.Format(time.RFC3339))
+	}
+	str += fmt.Sprintf("  idle time: bytes=%d %s\n",
+		s.RequestBytes, s.IdleTime.ReportString(DurationStatToString))
+	str += fmt.Sprintf("  response time: bytes=%d %s\n",
+		s.ResponseBytes, s.ResponseTime.ReportString(DurationStatToString))
+	str += "  response status:"
 	for status, count := range s.StatusCounts {
 		str += fmt.Sprintf(" %d=%d", status, count)
 	}
@@ -90,5 +99,5 @@ func (s *HttpStats) recordIdle(now time.Time) {
 		return
 	}
 	diff = now.Sub(s.lastResponseSentAt)
-	s.IdleTimes.PushDuration(diff)
+	s.IdleTime.PushDuration(diff)
 }

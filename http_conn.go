@@ -5,33 +5,35 @@ import (
 	"time"
 )
 
-type HttpPipelineOnCompleteFunc func()
+type HttpConnOnCompleteFunc func()
 
-type HttpPipeline struct {
+type HttpConn struct {
+	Name         string
 	RefCount     int32
 	StartedAt    time.Time
 	RequestTimes *Queue // of times when request was sent
 	Stats        *HttpStats
 
 	mux        sync.Mutex
-	onComplete HttpPipelineOnCompleteFunc
+	onComplete HttpConnOnCompleteFunc
 }
 
-func NewPipeline(onComplete HttpPipelineOnCompleteFunc) *HttpPipeline {
-	return &HttpPipeline{
+func NewHttpConn(name string, onComplete HttpConnOnCompleteFunc) *HttpConn {
+	return &HttpConn{
+		Name:         name,
 		RequestTimes: NewQueue(1),
 		onComplete:   onComplete,
 	}
 }
 
-func (h *HttpPipeline) Use() int32 {
+func (h *HttpConn) Use() int32 {
 	h.mux.Lock()
 	defer h.mux.Unlock()
 	h.RefCount++
 	return h.RefCount
 }
 
-func (h *HttpPipeline) Release() int32 {
+func (h *HttpConn) Release() int32 {
 	h.mux.Lock()
 	defer h.mux.Unlock()
 	h.RefCount--

@@ -24,7 +24,7 @@ import (
 
 // ubuntu@ip-172-26-4-144:~/httop$ GOPATH=`pwd` go build -a -ldflags '-extldflags "-static"' -o httop.linux64
 
-var iface = flag.String("i", "en6", "Interface to get packets from")
+var iface = flag.String("i", "eth0", "Interface to get packets from")
 var fname = flag.String("r", "", "Filename to read from, overrides -i")
 var snaplen = flag.Int("s", 65536, "SnapLen for pcap packet capture")
 var serverPort = flag.Int("p", 80, "Server port for differentiating HTTP responses from requests")

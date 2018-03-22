@@ -16,17 +16,17 @@ type HttpStream struct {
 	name          string
 	stype         string
 	reader        tcpreader.ReaderStream
-	pipeline      *HttpPipeline
+	httpConn      *HttpConn
 	reassembledAt time.Time
 }
 
 func NewHttpStream(name string, stype string,
-	reader tcpreader.ReaderStream, pipeline *HttpPipeline) *HttpStream {
+	reader tcpreader.ReaderStream, httpConn *HttpConn) *HttpStream {
 	return &HttpStream{
 		name:     name,
 		stype:    stype,
 		reader:   reader,
-		pipeline: pipeline,
+		httpConn: httpConn,
 	}
 }
 
@@ -45,22 +45,30 @@ func (h *HttpStream) Reassembled(reassembly []tcpassembly.Reassembly) {
 		log.Printf("%s skipped %d bytes", h.name, first.Skip)
 	}
 	if first.Start {
-		h.pipeline.StartedAt = h.reassembledAt
+		h.httpConn.StartedAt = h.reassembledAt
 	}
-	if h.pipeline.StartedAt.IsZero() {
-		h.pipeline.StartedAt = h.reassembledAt
+	if h.httpConn.StartedAt.IsZero() {
+		h.httpConn.StartedAt = h.reassembledAt
 		log.Printf("%s unknown when stream was started, using reassembly time", h.name)
 	}
-	if h.pipeline.Stats == nil {
-		h.pipeline.Stats = NewHttpStats(h.pipeline.StartedAt)
+	if h.httpConn.Stats == nil {
+		h.httpConn.Stats = NewHttpStats(h.httpConn.Name, h.httpConn.StartedAt)
+	}
+	for _, r := range reassembly {
+		if r.End {
+			if h.stype == CLIENT {
+				h.httpConn.Stats.RecordClientClose(r.Seen)
+			} else {
+				h.httpConn.Stats.RecordServerClose(r.Seen)
+			}
+		}
 	}
 	h.reader.Reassembled(reassembly)
 }
 
 func (h *HttpStream) ReassemblyComplete() {
-	log.Printf("%s closed:\n%s", h.name, h.pipeline.Stats)
 	h.reader.ReassemblyComplete()
-	h.pipeline.Release()
+	h.httpConn.Release()
 }
 
 //////////////////////////////////////////////////////////////////////
@@ -76,7 +84,7 @@ func (h *HttpStream) processClient() {
 			log.Println("Error reading", h.name, ":", err)
 		} else {
 			now := h.reassembledAt
-			h.pipeline.RequestTimes.Unshift(now)
+			h.httpConn.RequestTimes.Unshift(now)
 
 			bodyBytes := uint64(tcpreader.DiscardBytesToEOF(req.Body))
 			req.Body.Close()
@@ -87,7 +95,7 @@ func (h *HttpStream) processClient() {
 				log.Println(h.name, req.Method, req.Host, req.URL, bodyBytes, ctype)
 			}
 
-			h.pipeline.Stats.RecordRequest(now, bodyBytes)
+			h.httpConn.Stats.RecordRequest(now, bodyBytes)
 		}
 	}
 }
@@ -114,7 +122,7 @@ func (h *HttpStream) processServer() {
 				log.Println(h.name, resp.Status, bodyBytes, ctype)
 			}
 
-			val := h.pipeline.RequestTimes.Shift()
+			val := h.httpConn.RequestTimes.Shift()
 			var requestedAt time.Time
 			if val == nil {
 				requestedAt = now
@@ -122,7 +130,7 @@ func (h *HttpStream) processServer() {
 				requestedAt = val.(time.Time)
 			}
 
-			h.pipeline.Stats.RecordResponse(now, requestedAt, bodyBytes, resp.StatusCode)
+			h.httpConn.Stats.RecordResponse(now, requestedAt, bodyBytes, resp.StatusCode)
 		}
 	}
 }
