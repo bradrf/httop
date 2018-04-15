@@ -24,10 +24,13 @@ type HttpStream interface {
 	tcpassembly.Stream
 
 	StreamType() string
+
 	StartedAt(time.Time)
 	StoppedAt(time.Time)
 	KilledAt(time.Time)
 }
+
+type HttpStreamOnCompleteFunc func()
 
 type httpStream struct {
 	name          string
@@ -35,6 +38,7 @@ type httpStream struct {
 	stats         *HttpStats // shared between client/server
 	requestTimes  *Queue     // of times when request was sent (shared between client/server)
 	reassembledAt time.Time
+	onComplete    HttpStreamOnCompleteFunc
 }
 
 type clientHttpStream struct {
@@ -62,7 +66,8 @@ func HttpStreamType(transFlow gopacket.Flow) string {
 }
 
 func NewHttpStream(netFlow, transFlow gopacket.Flow,
-	httpStats *HttpStats, requestTimes *Queue, invert bool) HttpStream {
+	httpStats *HttpStats, requestTimes *Queue, invert bool,
+	onComplete HttpStreamOnCompleteFunc) HttpStream {
 
 	if invert {
 		netFlow, _ = gopacket.FlowFromEndpoints(netFlow.Dst(), netFlow.Src())
@@ -75,6 +80,7 @@ func NewHttpStream(netFlow, transFlow gopacket.Flow,
 		reader:       tcpreader.NewReaderStream(),
 		stats:        httpStats,
 		requestTimes: requestTimes,
+		onComplete:   onComplete,
 	}
 
 	if stype == CLIENT {
@@ -118,6 +124,7 @@ func (c *clientHttpStream) KilledAt(ts time.Time) {
 }
 
 func (c *clientHttpStream) start() {
+	defer c.onComplete()
 	buf := bufio.NewReader(&c.reader)
 	for {
 		req, err := http.ReadRequest(buf)
@@ -160,6 +167,7 @@ func (s *serverHttpStream) KilledAt(ts time.Time) {
 }
 
 func (s *serverHttpStream) start() {
+	defer s.onComplete()
 	buf := bufio.NewReader(&s.reader)
 	for {
 		resp, err := http.ReadResponse(buf, nil)

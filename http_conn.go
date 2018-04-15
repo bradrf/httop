@@ -14,7 +14,6 @@ type HttpConnOnCompleteFunc func()
 // manages both the server and client HTTP streams
 type HttpConn struct {
 	Name         string
-	RefCount     int32
 	StartedAt    time.Time
 	RequestTimes *Queue // of times when request was sent
 	Stats        *HttpStats
@@ -23,6 +22,7 @@ type HttpConn struct {
 	Server HttpStream
 
 	mux        sync.Mutex
+	refCount   int
 	onComplete HttpConnOnCompleteFunc
 }
 
@@ -39,15 +39,20 @@ func NewHttpConn(packetSeenAt time.Time, network gopacket.NetworkLayer,
 		StartedAt:    packetSeenAt,
 		RequestTimes: NewQueue(1),
 		Stats:        NewHttpStats(name, packetSeenAt),
+		refCount:     2,
 		onComplete:   onComplete,
 	}
 
-	stream := NewHttpStream(netFlow, transFlow, conn.Stats, conn.RequestTimes, false)
+	stream := NewHttpStream(
+		netFlow, transFlow, conn.Stats, conn.RequestTimes, false, conn.Release)
+
 	if stream.StreamType() == CLIENT {
 		conn.Client = stream
-		conn.Server = NewHttpStream(netFlow, transFlow, conn.Stats, conn.RequestTimes, true)
+		conn.Server = NewHttpStream(
+			netFlow, transFlow, conn.Stats, conn.RequestTimes, true, conn.release)
 	} else {
-		conn.Client = NewHttpStream(netFlow, transFlow, conn.Stats, conn.RequestTimes, true)
+		conn.Client = NewHttpStream(
+			netFlow, transFlow, conn.Stats, conn.RequestTimes, true, conn.release)
 		conn.Server = stream
 	}
 
@@ -74,19 +79,11 @@ func (h *HttpConn) FetchStream(transFlow gopacket.Flow) HttpStream {
 	return h.Server
 }
 
-func (h *HttpConn) Use() int32 {
+func (h *HttpConn) release() {
 	h.mux.Lock()
 	defer h.mux.Unlock()
-	h.RefCount++
-	return h.RefCount
-}
-
-func (h *HttpConn) Release() int32 {
-	h.mux.Lock()
-	defer h.mux.Unlock()
-	h.RefCount--
-	if h.RefCount < 1 {
+	h.refCount--
+	if h.refCount < 1 {
 		h.onComplete()
 	}
-	return h.RefCount
 }
