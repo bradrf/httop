@@ -16,12 +16,14 @@ import (
 
 // Handle decoding of HTTP requests and responses
 
+// TODO: remove these now that the types are reported and inferred
 const SERVER = "server"
 const CLIENT = "client"
 
 type HttpStream interface {
 	tcpassembly.Stream
 
+	StreamType() string
 	StartedAt(time.Time)
 	StoppedAt(time.Time)
 	KilledAt(time.Time)
@@ -97,37 +99,41 @@ func (h *httpStream) StartedAt(ts time.Time) {
 //////////////////////////////////////////////////////////////////////
 // CLIENT
 
-func (h *clientHttpStream) StoppedAt(ts time.Time) {
-	h.stats.RecordClientClose(ts, false)
+func (c *clientHttpStream) StreamType() string {
+	return CLIENT
 }
 
-func (h *clientHttpStream) KilledAt(ts time.Time) {
-	h.stats.RecordClientClose(ts, true)
+func (c *clientHttpStream) StoppedAt(ts time.Time) {
+	c.stats.RecordClientClose(ts, false)
 }
 
-func (h *clientHttpStream) start() {
-	buf := bufio.NewReader(&h.reader)
+func (c *clientHttpStream) KilledAt(ts time.Time) {
+	c.stats.RecordClientClose(ts, true)
+}
+
+func (c *clientHttpStream) start() {
+	buf := bufio.NewReader(&c.reader)
 	for {
 		req, err := http.ReadRequest(buf)
 		if err == io.EOF {
 			// We must read until we see an EOF... very important!
 			return
 		} else if err != nil {
-			log.Println("Error reading", h.name, ":", err)
+			log.Println("Error reading", c.name, ":", err)
 		} else {
-			now := h.reassembledAt
-			h.requestTimes.Unshift(now)
+			now := c.reassembledAt
+			c.requestTimes.Unshift(now)
 
 			bodyBytes := uint64(tcpreader.DiscardBytesToEOF(req.Body))
 			req.Body.Close()
 			if *verbose {
-				log.Println(h.name, "request:", req, "with", bodyBytes)
+				log.Println(c.name, "request:", req, "with", bodyBytes)
 			} else if !*quiet {
 				ctype := req.Header.Get("content-type")
-				log.Println(h.name, req.Method, req.Host, req.URL, bodyBytes, ctype)
+				log.Println(c.name, req.Method, req.Host, req.URL, bodyBytes, ctype)
 			}
 
-			h.stats.RecordRequest(now, bodyBytes)
+			c.stats.RecordRequest(now, bodyBytes)
 		}
 	}
 }
@@ -135,37 +141,41 @@ func (h *clientHttpStream) start() {
 //////////////////////////////////////////////////////////////////////
 // SERVER
 
-func (h *serverHttpStream) StoppedAt(ts time.Time) {
-	h.stats.RecordServerClose(ts, false)
+func (s *serverHttpStream) StreamType() string {
+	return SERVER
 }
 
-func (h *serverHttpStream) KilledAt(ts time.Time) {
-	h.stats.RecordServerClose(ts, true)
+func (s *serverHttpStream) StoppedAt(ts time.Time) {
+	s.stats.RecordServerClose(ts, false)
 }
 
-func (h *serverHttpStream) start() {
-	buf := bufio.NewReader(&h.reader)
+func (s *serverHttpStream) KilledAt(ts time.Time) {
+	s.stats.RecordServerClose(ts, true)
+}
+
+func (s *serverHttpStream) start() {
+	buf := bufio.NewReader(&s.reader)
 	for {
 		resp, err := http.ReadResponse(buf, nil)
 		if err == io.EOF || err == io.ErrUnexpectedEOF {
 			// We must read until we see an EOF... very important!
 			return
 		} else if err != nil {
-			log.Println("Error reading", h.name, ":", err)
+			log.Println("Error reading", s.name, ":", err)
 		} else {
-			now := h.reassembledAt
+			now := s.reassembledAt
 
 			bodyBytes := uint64(tcpreader.DiscardBytesToEOF(resp.Body))
 			resp.Body.Close()
 
 			if *verbose {
-				log.Println(h.name, "response:", resp, "with", bodyBytes)
+				log.Println(s.name, "response:", resp, "with", bodyBytes)
 			} else if !*quiet {
 				ctype := resp.Header.Get("content-type")
-				log.Println(h.name, resp.Status, bodyBytes, ctype)
+				log.Println(s.name, resp.Status, bodyBytes, ctype)
 			}
 
-			val := h.requestTimes.Shift()
+			val := s.requestTimes.Shift()
 			var requestedAt time.Time
 			if val == nil {
 				requestedAt = now
@@ -173,7 +183,7 @@ func (h *serverHttpStream) start() {
 				requestedAt = val.(time.Time)
 			}
 
-			h.stats.RecordResponse(now, requestedAt, bodyBytes, resp.StatusCode)
+			s.stats.RecordResponse(now, requestedAt, bodyBytes, resp.StatusCode)
 		}
 	}
 }

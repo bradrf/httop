@@ -40,9 +40,24 @@ func NewHttpConn(packetSeenAt time.Time, network gopacket.NetworkLayer,
 		Stats:        NewHttpStats(name, packetSeenAt),
 		onComplete:   onComplete,
 	}
-	conn.Client = NewHttpStream(netFlow, transFlow, conn.Stats, conn.RequestTimes)
-	conn.Server = NewHttpStream(netFlow, transFlow, conn.Stats, conn.RequestTimes)
+
+	stream := NewHttpStream(netFlow, transFlow, conn.Stats, conn.RequestTimes)
+	if stream.StreamType() == CLIENT {
+		conn.Client = stream
+		conn.Server = NewHttpStream(
+			netFlow, Invert(transFlow), conn.Stats, conn.RequestTimes)
+	} else {
+		conn.Client = NewHttpStream(
+			netFlow, Invert(transFlow), conn.Stats, conn.RequestTimes)
+		conn.Server = stream
+	}
+
 	return conn
+}
+
+func Invert(transFlow gopacket.Flow) gopacket.Flow {
+	flow, _ := gopacket.FlowFromEndpoints(transFlow.Dst(), transFlow.Src())
+	return flow
 }
 
 func (h *HttpConn) Record(packetSeenAt time.Time, transport gopacket.TransportLayer) {
