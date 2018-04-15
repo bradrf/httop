@@ -19,6 +19,7 @@ type HttpStats struct {
 	ResponseTime   *SimpleStats // track how much time was spent waiting for a response
 	ClientClosedAt time.Time    // time when client closed the connection
 	ServerClosedAt time.Time    // time when server closed the connection
+	ClosedBy       string       // track who closed and if it was killed with a RST
 
 	mux                sync.Mutex
 	sawStart           bool // indicate if we saw the TCP handshake for this connection
@@ -67,32 +68,36 @@ func (s *HttpStats) RecordResponse(now time.Time, requestSentAt time.Time, bytes
 func (s *HttpStats) RecordStart(now time.Time) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	s.startedAt = now
-	s.sawStart = true
+	// only set once (i.e. ignore SYN-ACK from server unless we missed the client's SYN)
+	if s.startedAt.IsZero() {
+		s.startedAt = now
+		s.sawStart = true
+	}
 }
 
-// TODO: indicate in stat for killed connections
 func (s *HttpStats) RecordClientClose(now time.Time, killed bool) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.recordIdle(now)
 	s.ClientClosedAt = now
+	if s.ClosedBy == "" {
+		s.ClosedBy = "client"
+		if killed {
+			s.ClosedBy += " (killed)"
+		}
+	}
 }
 
 func (s *HttpStats) RecordServerClose(now time.Time, killed bool) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.ServerClosedAt = now
-}
-
-func (s *HttpStats) ClosedBy() string {
-	if !s.ClientClosedAt.IsZero() && s.ClientClosedAt.Sub(s.ServerClosedAt) < 0 {
-		return CLIENT
+	if s.ClosedBy == "" {
+		s.ClosedBy = "server"
+		if killed {
+			s.ClosedBy += " (killed)"
+		}
 	}
-	if !s.ServerClosedAt.IsZero() && s.ServerClosedAt.Sub(s.ClientClosedAt) < 0 {
-		return SERVER
-	}
-	return ""
 }
 
 func (s *HttpStats) Age() time.Duration {
@@ -110,10 +115,9 @@ func (s *HttpStats) ReportString(prefix string) string {
 		"%s%s: requests=%d responses=%d request_bytes=%d response_bytes=%d age=%s%s",
 		prefix, s.Name, s.RequestCount, s.ResponseCount,
 		s.RequestBytes, s.ResponseBytes, s.Age(), postAge)
-	closedBy := s.ClosedBy()
-	if closedBy != "" {
+	if s.ClosedBy != "" {
 		str += fmt.Sprintf("\n%s  closed by %s: client=%s server=%s",
-			prefix, closedBy,
+			prefix, s.ClosedBy,
 			s.ClientClosedAt.Format(time.RFC3339Nano),
 			s.ServerClosedAt.Format(time.RFC3339Nano))
 	}

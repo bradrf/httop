@@ -32,8 +32,8 @@ type HttpStream interface {
 type httpStream struct {
 	name          string
 	reader        tcpreader.ReaderStream
-	stats         *HttpStats
-	requestTimes  *Queue // of times when request was sent
+	stats         *HttpStats // shared between client/server
+	requestTimes  *Queue     // of times when request was sent (shared between client/server)
 	reassembledAt time.Time
 }
 
@@ -62,7 +62,12 @@ func HttpStreamType(transFlow gopacket.Flow) string {
 }
 
 func NewHttpStream(netFlow, transFlow gopacket.Flow,
-	httpStats *HttpStats, requestTimes *Queue) HttpStream {
+	httpStats *HttpStats, requestTimes *Queue, invert bool) HttpStream {
+
+	if invert {
+		netFlow, _ = gopacket.FlowFromEndpoints(netFlow.Dst(), netFlow.Src())
+		transFlow, _ = gopacket.FlowFromEndpoints(transFlow.Dst(), transFlow.Src())
+	}
 
 	stype := HttpStreamType(transFlow)
 	stream := httpStream{
@@ -99,6 +104,7 @@ func (h *httpStream) StartedAt(ts time.Time) {
 //////////////////////////////////////////////////////////////////////
 // CLIENT
 
+// TODO: determine better way to confer type of stream!
 func (c *clientHttpStream) StreamType() string {
 	return CLIENT
 }
