@@ -71,14 +71,15 @@ func (s *HttpStats) RecordStart(now time.Time) {
 	s.sawStart = true
 }
 
-func (s *HttpStats) RecordClientClose(now time.Time) {
+// TODO: indicate in stat for killed connections
+func (s *HttpStats) RecordClientClose(now time.Time, killed bool) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.recordIdle(now)
 	s.ClientClosedAt = now
 }
 
-func (s *HttpStats) RecordServerClose(now time.Time) {
+func (s *HttpStats) RecordServerClose(now time.Time, killed bool) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
 	s.ServerClosedAt = now

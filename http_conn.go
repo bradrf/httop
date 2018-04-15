@@ -19,8 +19,8 @@ type HttpConn struct {
 	RequestTimes *Queue // of times when request was sent
 	Stats        *HttpStats
 
-	Client *HttpStream
-	Server *HttpStream
+	Client HttpStream
+	Server HttpStream
 
 	mux        sync.Mutex
 	onComplete HttpConnOnCompleteFunc
@@ -30,9 +30,9 @@ func NewHttpConn(packetSeenAt time.Time, network gopacket.NetworkLayer,
 	transport gopacket.TransportLayer, onComplete HttpConnOnCompleteFunc) *HttpConn {
 
 	netFlow := network.NetworkFlow()
-	tranFlow := transport.TransportFlow()
+	transFlow := transport.TransportFlow()
 	name := fmt.Sprintf("%s:%s <=> %s:%s",
-		netFlow.Src(), tranFlow.Src(), netFlow.Dst(), tranFlow.Dst())
+		netFlow.Src(), transFlow.Src(), netFlow.Dst(), transFlow.Dst())
 	conn := &HttpConn{
 		Name:         name,
 		StartedAt:    packetSeenAt,
@@ -40,22 +40,24 @@ func NewHttpConn(packetSeenAt time.Time, network gopacket.NetworkLayer,
 		Stats:        NewHttpStats(name, packetSeenAt),
 		onComplete:   onComplete,
 	}
-	conn.Client = NewHttpStream(netFlow, tranFlow, conn)
-	conn.Server = NewHttpStream(netFlow, tranFlow, conn)
+	conn.Client = NewHttpStream(netFlow, transFlow, conn.Stats, conn.RequestTimes)
+	conn.Server = NewHttpStream(netFlow, transFlow, conn.Stats, conn.RequestTimes)
 	return conn
 }
 
-func (h *HttpConn) Record(packetSeenAt time.Time, tcp *layers.TCP) {
+func (h *HttpConn) Record(packetSeenAt time.Time, transport gopacket.TransportLayer) {
+	stream := h.FetchStream(transport.TransportFlow())
+	tcp := transport.(*layers.TCP)
 	if tcp.SYN {
-		// TODO: record connection started
+		stream.StartedAt(packetSeenAt)
 	} else if tcp.FIN {
-		// TODO: record connection stopped
+		stream.StoppedAt(packetSeenAt)
 	} else if tcp.RST {
-		// TODO: record connection killed
+		stream.KilledAt(packetSeenAt)
 	}
 }
 
-func (h *HttpConn) FetchStream(transFlow gopacket.Flow) *HttpStream {
+func (h *HttpConn) FetchStream(transFlow gopacket.Flow) HttpStream {
 	stype := HttpStreamType(transFlow)
 	if stype == CLIENT {
 		return h.Client

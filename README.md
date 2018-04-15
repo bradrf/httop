@@ -9,3 +9,7 @@ httop => conn-tracker => http-conn => http-stream(client & server) => create-sta
    +-+- http connection: manages one set of server and client http streams
      |
      +--- http stream: manages either a client or a sever http stream
+
+http streams share...
+  * a queue of request sent times (to track elapsed time to respond)
+  * http statistics

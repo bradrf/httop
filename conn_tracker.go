@@ -7,12 +7,11 @@ import (
 	"time"
 
 	"github.com/google/gopacket"
-	"github.com/google/gopacket/layers"
 	"github.com/google/gopacket/tcpassembly"
 )
 
-// implement tcpassembly.StreamFactory
-//
+// implements tcpassembly.StreamFactory
+
 // associate requests with responses (HTTP 1.1 allows multiple requests outstanding as long as
 // responses are returned in the same order; see RFC-2616 section 8.1.2.2 Pipelining)
 type ConnTracker struct {
@@ -73,7 +72,7 @@ func (c *ConnTracker) Record(packetSeenAt time.Time,
 		c.conns[bidirectionalKey] = httpConn
 	}
 	c.mux.Unlock()
-	httpConn.Record(packetSeenAt, transport.(*layers.TCP))
+	httpConn.Record(packetSeenAt, transport)
 }
 
 // attempt close of a httpConn, cleaning up if no longer referenced and aggregate stats
@@ -129,8 +128,6 @@ func (c *ConnTracker) Report() {
 	// 	log.Println("  5XX:", c.response5XXStats)
 	// }
 	for _, httpConn := range c.conns {
-		if httpConn.Stats != nil {
-			fmt.Println(httpConn.Stats.ReportString("[RPT] "))
-		}
+		fmt.Println(httpConn.Stats.ReportString("[RPT] "))
 	}
 }
