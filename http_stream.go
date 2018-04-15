@@ -2,14 +2,23 @@ package main
 
 import (
 	"bufio"
+	"encoding/binary"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
 	"time"
 
+	"github.com/google/gopacket"
 	"github.com/google/gopacket/tcpassembly"
 	"github.com/google/gopacket/tcpassembly/tcpreader"
 )
+
+const SERVER = "server"
+const CLIENT = "client"
+
+// TODO: can we get rid of httpconn? just handle everthing through it?
+// TODO: should not be referencing "global" command line option "serverPort"!
 
 // Handle decoding of HTTP requests and implement tcpassembly.Stream
 type HttpStream struct {
@@ -20,22 +29,33 @@ type HttpStream struct {
 	reassembledAt time.Time
 }
 
-func NewHttpStream(name string, stype string,
-	reader tcpreader.ReaderStream, httpConn *HttpConn) *HttpStream {
-	return &HttpStream{
-		name:     name,
-		stype:    stype,
-		reader:   reader,
-		httpConn: httpConn,
+func HttpStreamType(transFlow gopacket.Flow) string {
+	dstPort := int(binary.BigEndian.Uint16(transFlow.Dst().Raw()))
+	srcPort := int(binary.BigEndian.Uint16(transFlow.Src().Raw()))
+	if dstPort == *serverPort {
+		return CLIENT // requests made to the server port
 	}
+	if srcPort == *serverPort {
+		return SERVER // responses to client requests from the server port
+	}
+	log.Panic("Frame is not to or from the server port:", transFlow)
+	return ""
 }
 
-func (h *HttpStream) Process() {
-	if h.stype == CLIENT {
-		h.processClient()
-	} else {
-		h.processServer()
+func NewHttpStream(netFlow, transFlow gopacket.Flow, httpConn *HttpConn) *HttpStream {
+	stype := HttpStreamType(transFlow)
+	stream := &HttpStream{
+		name:     fmt.Sprintf("%s (%s %s)", stype, netFlow, transFlow),
+		stype:    stype,
+		reader:   tcpreader.NewReaderStream(),
+		httpConn: httpConn,
 	}
+	if stype == CLIENT {
+		go stream.processClient()
+	} else {
+		go stream.processServer()
+	}
+	return stream
 }
 
 func (h *HttpStream) Reassembled(reassembly []tcpassembly.Reassembly) {

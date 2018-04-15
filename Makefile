@@ -1,12 +1,20 @@
+ifndef GOPATH
+$(error GOPATH environment variable is required)
+endif
+
 PACKAGE  = httop
 DATE    ?= $(shell date +%FT%T%z)
-VERSION ?= $(shell git describe --tags --always --dirty --match=v*)
+VERSION ?= 0.0.$(shell git describe --tags --always --dirty --match=v*)
 
-GOCMD=go
-GOBUILD=$(GOCMD) build
-GOCLEAN=$(GOCMD) clean
-GOTEST=$(GOCMD) test
-GOGET=$(GOCMD) get
+GOCMD    = go
+GOBUILD  = $(GOCMD) build
+GOCLEAN  = $(GOCMD) clean
+GOTEST   = $(GOCMD) test
+GOGET    = $(GOCMD) get
+
+LDFLAGS  = -s -w -X main.version=$(VERSION)
+
+######################################################################
 
 all: test build
 
@@ -25,15 +33,18 @@ run:
 
 clean:
 	$(GOCLEAN)
-	rm -f $(PACKAGE) $(PACKAGE)_linux
+	$(RM) $(PACKAGE) $(PACKAGE)_linux
+
+distclean: clean
+	git clean -xdf
 
 ######################################################################
 
 $(PACKAGE): vendor
-	$(GOBUILD) -o $@
+	$(GOBUILD) --ldflags '$(LDFLAGS)' -o $@
 
 $(PACKAGE)_%: vendor
-	$(GOBUILD) --ldflags '-w -s -linkmode external -extldflags "-static"' -o $@
+	$(GOBUILD) --ldflags '$(LDFLAGS) -linkmode external -extldflags "-static"' -o $@
 
 .build-container: Dockerfile.build
 	docker build -f $< -t $(PACKAGE)-build .

@@ -22,8 +22,9 @@ import (
 
 // TODO: report client IP from [0] of x-forward-for headers...
 
-// ubuntu@ip-172-26-4-144:~/httop$ GOPATH=`pwd` go build -a -ldflags '-extldflags "-static"' -o httop.linux64
+var version string
 
+var versionOpt = flag.Bool("version", false, "Show the version and exit")
 var iface = flag.String("i", "eth0", "Interface to get packets from")
 var fname = flag.String("r", "", "Filename to read from, overrides -i")
 var snaplen = flag.Int("s", 65536, "SnapLen for pcap packet capture")
@@ -36,6 +37,11 @@ var delaySeconds = flag.Int("delay", 5, "Number of seconds to wait between conne
 
 func main() {
 	flag.Parse()
+
+	if *versionOpt {
+		fmt.Println(version)
+		os.Exit(0)
+	}
 
 	var handle *pcap.Handle
 	var err error
@@ -62,8 +68,7 @@ func main() {
 	}
 
 	connTracker := NewConnTracker()
-	streamFactory := NewHttpStreamFactory(connTracker)
-	streamPool := tcpassembly.NewStreamPool(streamFactory)
+	streamPool := tcpassembly.NewStreamPool(connTracker)
 	assembler := tcpassembly.NewAssembler(streamPool)
 
 	packetSource := gopacket.NewPacketSource(handle, handle.LinkType())
@@ -94,10 +99,12 @@ func main() {
 				// log.Println("Ignoring unusable packet")
 				continue
 			}
-			connTracker.LastPacketSeen = packet.Metadata().Timestamp
-			tcp := packet.TransportLayer().(*layers.TCP)
-			assembler.AssembleWithTimestamp(packet.NetworkLayer().NetworkFlow(), tcp,
-				packet.Metadata().Timestamp)
+			packetSeenAt := packet.Metadata().Timestamp
+			network := packet.NetworkLayer()
+			transport := packet.TransportLayer()
+			connTracker.Record(packetSeenAt, network, transport)
+			assembler.AssembleWithTimestamp(
+				network.NetworkFlow(), transport.(*layers.TCP), packetSeenAt)
 
 		case <-flushTicker:
 			if *flushMinutes > 0 {

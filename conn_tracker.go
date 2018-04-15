@@ -5,8 +5,14 @@ import (
 	"log"
 	"sync"
 	"time"
+
+	"github.com/google/gopacket"
+	"github.com/google/gopacket/layers"
+	"github.com/google/gopacket/tcpassembly"
 )
 
+// implement tcpassembly.StreamFactory
+//
 // associate requests with responses (HTTP 1.1 allows multiple requests outstanding as long as
 // responses are returned in the same order; see RFC-2616 section 8.1.2.2 Pipelining)
 type ConnTracker struct {
@@ -49,18 +55,25 @@ func NewConnTracker() *ConnTracker {
 	}
 }
 
-func (c *ConnTracker) Open(connName string, bidirectionalKey uint64) *HttpConn {
+// quack like a tcpassembly.StreamFactory
+func (c *ConnTracker) New(netFlow, transFlow gopacket.Flow) tcpassembly.Stream {
+	return c.conns[transFlow.FastHash()].FetchStream(transFlow)
+}
+
+func (c *ConnTracker) Record(packetSeenAt time.Time,
+	network gopacket.NetworkLayer, transport gopacket.TransportLayer) {
+
+	bidirectionalKey := transport.TransportFlow().FastHash()
 	c.mux.Lock()
-	defer c.mux.Unlock()
 	httpConn, set := c.conns[bidirectionalKey]
 	if !set {
 		c.TotalSeen++
-		httpConn = NewHttpConn(connName, c.LastPacketSeen,
+		httpConn = NewHttpConn(packetSeenAt, network, transport,
 			func() { c.Close(bidirectionalKey) })
 		c.conns[bidirectionalKey] = httpConn
 	}
-	httpConn.Use()
-	return httpConn
+	c.mux.Unlock()
+	httpConn.Record(packetSeenAt, transport.(*layers.TCP))
 }
 
 // attempt close of a httpConn, cleaning up if no longer referenced and aggregate stats
