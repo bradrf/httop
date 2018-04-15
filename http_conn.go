@@ -44,7 +44,7 @@ func NewHttpConn(packetSeenAt time.Time, network gopacket.NetworkLayer,
 	}
 
 	stream := NewHttpStream(
-		netFlow, transFlow, conn.Stats, conn.RequestTimes, false, conn.Release)
+		netFlow, transFlow, conn.Stats, conn.RequestTimes, false, conn.release)
 
 	if stream.StreamType() == CLIENT {
 		conn.Client = stream

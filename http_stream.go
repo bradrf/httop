@@ -182,19 +182,24 @@ func (s *serverHttpStream) start() {
 			bodyBytes := uint64(tcpreader.DiscardBytesToEOF(resp.Body))
 			resp.Body.Close()
 
-			if *verbose {
-				log.Println(s.name, "response:", resp, "with", bodyBytes)
-			} else if !*quiet {
-				ctype := resp.Header.Get("content-type")
-				log.Println(s.name, resp.Status, bodyBytes, ctype)
-			}
-
 			val := s.requestTimes.Shift()
 			var requestedAt time.Time
 			if val == nil {
 				requestedAt = now
 			} else {
 				requestedAt = val.(time.Time)
+			}
+			diff := now.Sub(requestedAt)
+
+			// TODO: seems like it'd be nice to report the associated request here?
+			//       might be too verbose (i.e. might want to quell original request...?)
+
+			if *verbose {
+				log.Println(
+					s.name, "response:", resp, "with", bodyBytes, "took", diff)
+			} else if !*quiet {
+				ctype := resp.Header.Get("content-type")
+				log.Println(s.name, resp.Status, bodyBytes, ctype, diff)
 			}
 
 			s.stats.RecordResponse(now, requestedAt, bodyBytes, resp.StatusCode)

@@ -68,11 +68,10 @@ func (s *HttpStats) RecordResponse(now time.Time, requestSentAt time.Time, bytes
 func (s *HttpStats) RecordStart(now time.Time) {
 	s.mux.Lock()
 	defer s.mux.Unlock()
-	// only set once (i.e. ignore SYN-ACK from server unless we missed the client's SYN)
-	if s.startedAt.IsZero() {
-		s.startedAt = now
-		s.sawStart = true
-	}
+	// note: intentionally tracking start time as recorded by most recent SYN
+	//       (i.e. connection is considered started when the TCP handshake is completed)
+	s.startedAt = now
+	s.sawStart = true
 }
 
 func (s *HttpStats) RecordClientClose(now time.Time, killed bool) {
